@@ -120,6 +120,10 @@ public actor PipelineRunner {
             mark(.diarize, onStage)
             let spans = await runDiarization(expectedSpeakers: meta.expectedSpeakers)
             try write(spans, to: folder.diarizationJSON)
+            // Old LLM corrections are keyed against the spans this just replaced;
+            // left in place they could flip a now-correct turn that happens to
+            // share a timecode. The summarize ahead infers fresh ones.
+            meta.speakerCorrections = nil
             meta.pipeline.diarized = true
             try folder.saveMeta(meta)
         }
@@ -139,9 +143,17 @@ public actor PipelineRunner {
             let result = try await summarizer.summarize(transcript: transcript)
             try result.markdown.write(to: folder.summaryMD, atomically: true, encoding: .utf8)
             if let title = result.title { meta.title = title }
+            appendCorrections(result, to: &meta)
             if !result.speakerNames.isEmpty {
                 meta.speakerNames.merge(result.speakerNames) { _, new in new }
-                try renderTranscript(names: meta.speakerNames)  // re-render with names
+            }
+            // Persist names + corrections before re-rendering (renderTranscript
+            // reads them back from meta.json), but mark the stage done only
+            // after the render — a failed render re-runs summarize instead of
+            // stranding transcript.md without the fixes.
+            try folder.saveMeta(meta)
+            if !result.speakerNames.isEmpty || !result.corrections.isEmpty {
+                try renderTranscript(names: meta.speakerNames)  // names + corrections
             }
             meta.pipeline.summarized = true
             try folder.saveMeta(meta)
@@ -192,6 +204,8 @@ public actor PipelineRunner {
         case .diarize:
             let spans = await runDiarization(expectedSpeakers: meta.expectedSpeakers)
             try write(spans, to: folder.diarizationJSON)
+            // Keyed against the spans this just replaced — see runStages.
+            meta.speakerCorrections = nil
             meta.pipeline.diarized = true
         case .merge:
             try renderTranscript(names: meta.speakerNames)
@@ -207,8 +221,14 @@ public actor PipelineRunner {
             let result = try await summarizer.summarize(transcript: transcript)
             try result.markdown.write(to: folder.summaryMD, atomically: true, encoding: .utf8)
             if let title = result.title { meta.title = title }
+            appendCorrections(result, to: &meta)
             if !result.speakerNames.isEmpty {
                 meta.speakerNames.merge(result.speakerNames) { _, new in new }
+            }
+            // Save first (renderTranscript reads corrections from meta.json);
+            // the summarized flag lands with the final save below.
+            try folder.saveMeta(meta)
+            if !result.speakerNames.isEmpty || !result.corrections.isEmpty {
                 try renderTranscript(names: meta.speakerNames)
             }
             meta.pipeline.summarized = true
@@ -217,23 +237,43 @@ public actor PipelineRunner {
         return meta
     }
 
+    /// Accumulate LLM turn corrections in meta. Must run BEFORE this round's
+    /// inferred names are merged into meta: canonicalization needs the map the
+    /// LLM's transcript was rendered with — extended with the names it
+    /// inferred this round, which it may already be using in `corrections`.
+    private func appendCorrections(_ result: SummaryResult, to meta: inout CallMeta) {
+        guard !result.corrections.isEmpty else { return }
+        let merged = SpeakerCorrections.appending(
+            result.corrections,
+            to: meta.speakerCorrections ?? [],
+            names: meta.speakerNames.merging(result.speakerNames) { _, new in new }
+        )
+        meta.speakerCorrections = merged.isEmpty ? nil : merged
+    }
+
     /// Re-render transcript.md from cached data with a (possibly updated) name
     /// map — used by "apply inferred names" and manual rename, no re-merge.
     public func renderTranscript(names: [String: String]) throws {
         let mic: TrackTranscription = try read(folder.whisperMicJSON)
         let system: TrackTranscription = try read(folder.whisperSystemJSON)
         let spans: [SpeakerSpan] = (try? read(folder.diarizationJSON)) ?? []
+        let meta = try? folder.loadMeta()
         // When the user fixed the speaker count, trust it — don't fold a forced
         // cluster away as a phantom.
         var config = MergeConfig()
-        if (try? folder.loadMeta())?.expectedSpeakers != nil { config.phantomSpeakerMinDuration = 0 }
-        let transcript = TranscriptMerger.merge(
+        if meta?.expectedSpeakers != nil { config.phantomSpeakerMinDuration = 0 }
+        var transcript = TranscriptMerger.merge(
             micWords: mic.words,
             systemWords: system.words,
             spans: spans,
             config: config,
             detectedLanguage: mic.detectedLanguage ?? system.detectedLanguage
         )
+        // Turn-level fixes the summarizer inferred from context survive every
+        // re-render; ones a re-diarization invalidated just stop matching.
+        if let corrections = meta?.speakerCorrections {
+            transcript = SpeakerCorrections.apply(corrections, to: transcript, names: names)
+        }
         let markdown = TranscriptMarkdownRenderer.render(transcript, names: names)
         try markdown.write(to: folder.transcriptMD, atomically: true, encoding: .utf8)
         // Structured sidecar with real per-utterance times for the UI highlight.

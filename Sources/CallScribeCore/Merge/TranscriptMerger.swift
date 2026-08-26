@@ -15,7 +15,8 @@ public enum TranscriptMerger {
         detectedLanguage: String? = nil
     ) -> Transcript {
         let normSystem = normalize(systemWords, config: config)
-        let system = attribute(systemWords: normSystem, spans: spans, config: config)
+        let refinedSpans = refineSpanBoundaries(spans, systemWords: normSystem, config: config)
+        let system = attribute(systemWords: normSystem, spans: refinedSpans, config: config)
         // Build utterances per track *before* interleaving, so simultaneous
         // speech yields two overlapping utterances instead of shredding into
         // alternating single words.
@@ -104,6 +105,40 @@ public enum TranscriptMerger {
     }
 
     // MARK: - Stages
+
+    /// Refine diarization boundaries with Whisper's word timings: speakers
+    /// change in the silence between words, never mid-word, and word timings
+    /// are finer than the diarizer's frames. Each boundary between adjacent
+    /// different-speaker spans moves to the midpoint of the nearest inter-word
+    /// silence (within `spanBoundaryRefineTolerance`), so no word straddles a
+    /// boundary and turn edges stop drifting. `systemWords` sorted by start.
+    static func refineSpanBoundaries(
+        _ spans: [SpeakerSpan], systemWords: [Word], config: MergeConfig
+    ) -> [SpeakerSpan] {
+        guard config.spanBoundaryRefineTolerance > 0, spans.count > 1 else { return spans }
+
+        // Candidate cut points: midpoints of the silences between words.
+        var cuts: [TimeInterval] = []
+        for (word, next) in zip(systemWords, systemWords.dropFirst()) where next.start > word.end {
+            cuts.append((word.end + next.start) / 2)
+        }
+        guard !cuts.isEmpty else { return spans }
+
+        var refined = spans.sorted { ($0.start, $0.end) < ($1.start, $1.end) }
+        for i in 0..<(refined.count - 1) {
+            let a = refined[i], b = refined[i + 1]
+            guard a.speakerID != b.speakerID else { continue }
+            // Same formula whether the spans leave a gap or overlap.
+            let nominal = (a.end + b.start) / 2
+            guard let cut = cuts.min(by: { abs($0 - nominal) < abs($1 - nominal) }),
+                  abs(cut - nominal) <= config.spanBoundaryRefineTolerance,
+                  cut > a.start, cut < b.end   // never invert a span
+            else { continue }
+            refined[i] = SpeakerSpan(speakerID: a.speakerID, start: a.start, end: cut, name: a.name)
+            refined[i + 1] = SpeakerSpan(speakerID: b.speakerID, start: cut, end: b.end, name: b.name)
+        }
+        return refined
+    }
 
     static func normalize(_ words: [Word], config: MergeConfig) -> [Word] {
         words

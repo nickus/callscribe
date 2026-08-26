@@ -33,10 +33,21 @@ public enum SummaryPrompt {
         it) containing a "title" — 3–6 words naming the call, in the \
         transcript's language — and a "speakers" object mapping labels to any \
         real names you can confidently infer (use {} if none). Always include \
-        the "title". Example:
+        the "title".
+
+        If a line is clearly attributed to the wrong speaker given the \
+        conversational context (an answer credited to the person who asked the \
+        question, a line that must belong to the other party mid-dialogue), \
+        also include a "corrections" array. Each item is \
+        {"time": "HH:MM:SS", "from": "<label shown>", "to": "<label it should be>"} \
+        with the timecode copied verbatim from that line. Only reassign \
+        between remote speakers ("Speaker N" or named) — never to or from \
+        "Me" — and only when you are confident; omit the array when in doubt. \
+        Example:
 
         ```json
-        {"title": "Launch planning sync", "speakers": {"Speaker 1": "Misha"}}
+        {"title": "Launch planning sync", "speakers": {"Speaker 1": "Misha"}, \
+        "corrections": [{"time": "00:04:12", "from": "Speaker 1", "to": "Speaker 2"}]}
         ```
 
         Transcript:
@@ -59,6 +70,7 @@ public enum SummaryPrompt {
 
         var names: [String: String] = [:]
         var title: String?
+        var corrections: [SpeakerCorrection] = []
         if let data = block.json.data(using: .utf8),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let speakers = root["speakers"] as? [String: Any] {
@@ -68,6 +80,15 @@ public enum SummaryPrompt {
                !t.isEmpty {
                 title = t
             }
+            if let list = root["corrections"] as? [[String: Any]] {
+                corrections = list.compactMap { item in
+                    guard let time = item["time"] as? String,
+                          let from = item["from"] as? String,
+                          let to = item["to"] as? String
+                    else { return nil }
+                    return SpeakerCorrection(time: time, from: from, to: to)
+                }
+            }
         }
 
         var markdown = response
@@ -75,7 +96,8 @@ public enum SummaryPrompt {
         return SummaryResult(
             markdown: markdown.trimmingCharacters(in: .whitespacesAndNewlines),
             speakerNames: names,
-            title: title
+            title: title,
+            corrections: corrections
         )
     }
 

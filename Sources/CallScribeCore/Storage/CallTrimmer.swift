@@ -29,6 +29,9 @@ public enum CallTrimmer {
         meta.pipeline = CallMeta.PipelineState()
         meta.durationSec = duration
         meta.endedAt = meta.startedAt.addingTimeInterval(duration)
+        // LLM speaker corrections are keyed by timecode; the trim just shifted
+        // every timestamp, so they'd match the wrong turns (or none).
+        meta.speakerCorrections = nil
         // Deliberately kept: title, speakerNames, expectedSpeakers, language —
         // the user set those, and a trim shouldn't undo their work.
         try folder.saveMeta(meta)

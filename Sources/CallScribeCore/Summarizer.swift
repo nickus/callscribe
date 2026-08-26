@@ -14,10 +14,18 @@ public struct SummaryResult: Sendable, Equatable {
     public let speakerNames: [String: String]
     /// Short title for the call (like an auto-named chat), if produced.
     public let title: String?
+    /// Turns whose speaker the LLM judged misattributed from context.
+    public let corrections: [SpeakerCorrection]
 
-    public init(markdown: String, speakerNames: [String: String], title: String? = nil) {
+    public init(
+        markdown: String,
+        speakerNames: [String: String],
+        title: String? = nil,
+        corrections: [SpeakerCorrection] = []
+    ) {
         self.markdown = markdown
         self.speakerNames = speakerNames
         self.title = title
+        self.corrections = corrections
     }
 }

@@ -9,6 +9,12 @@ public struct MergeConfig: Sendable {
     /// nearest span within this distance; farther words inherit the previous
     /// word's speaker.
     public var spanSnapTolerance: TimeInterval = 1.0
+    /// Diarization cuts on model frames, not words, so a boundary between two
+    /// speakers often lands mid-word and the first words of a reply stick to
+    /// the previous speaker. Whisper's word timings are finer: each boundary
+    /// between different-speaker spans is moved to the nearest silence between
+    /// system-track words, when one is within this distance. 0 disables.
+    public var spanBoundaryRefineTolerance: TimeInterval = 1.0
     /// Words below this Whisper probability are dropped (0 = keep all);
     /// raise to fight hallucinations on silence.
     public var minWordProbability: Float = 0.0

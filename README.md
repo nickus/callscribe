@@ -6,7 +6,9 @@ remote voices that bleed from the speakers into the mic (SpeexDSP echo
 cancellation), transcribes both fully offline with WhisperKit, diarizes remote
 participants with FluidAudio, merges everything into a timecoded per-speaker
 transcript, and produces a summary + action-item checklist via the local
-`claude -p` CLI. Calls are grouped into projects and process in the background,
+`claude -p` CLI — the same LLM pass names the speakers and repairs turns the
+diarizer attributed to the wrong person, judging by conversational context.
+Calls are grouped into projects and process in the background,
 so the next call can be recorded immediately; a Trim tool cuts dead air off a
 recording and re-runs the pipeline on the shorter audio.
 

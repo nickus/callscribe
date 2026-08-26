@@ -40,11 +40,24 @@ Speech recognition must run strictly on-device, no network.
 4. **Diarization of remote participants in the MVP**: FluidAudio (pyannote models on
    CoreML, on-device) clusters voices on the system-audio track into `Speaker 1/2/3`.
    Known limits: labels are anonymous (not names), and boundaries degrade on
-   overlapping speech, similar voices, and compressed conference audio.
+   overlapping speech, similar voices, and compressed conference audio. The
+   diarizer cuts on model frames, so before attribution each boundary between
+   different-speaker spans is snapped to the nearest inter-word silence of the
+   Whisper transcription (word timings are the finer signal; speakers change
+   between words, not mid-word) — reply edges stop stealing each other's words.
 5. **Speaker names via the LLM**: the Summarizer prompt maps speaker labels to real
    names from conversation context ("Thanks, Misha" → Speaker 2 = Misha) —
    best-effort; manual rename in the UI is the fallback. The mapping is stored in
-   `meta.json` and applied to the transcript.
+   `meta.json` and applied to the transcript. The same reply carries turn-level
+   *speaker corrections* — lines whose attribution is clearly wrong in context
+   (an answer credited to the person who asked it). Applied conservatively:
+   only between remote speakers (never "Me" — the mic track is ground truth),
+   and only when both the turn's timecode and its current label match. Stored
+   in `meta.json` with labels canonicalized ("Speaker 2", never a display
+   name, so renames can't strand them) and each entry keyed by the turn's
+   original speaker (chains collapse, exact reverts cancel — replay order
+   never matters). They survive every re-render; cleared when diarization
+   re-runs and on Trim, whose new spans/timecodes they no longer describe.
 6. **Audio is the source of truth**: written to disk continuously from the first
    second; the transcript can always be regenerated. An app crash never loses a call.
 7. **Storage is plain folders, no DB**; Markdown is indexed by Spotlight (search for free).
@@ -130,11 +143,12 @@ Speech recognition must run strictly on-device, no network.
 - **Transcriber** — live: mixed signal → ring buffer → WhisperKit streaming (draft,
   no attribution). Final: each track separately with word timestamps.
 - **Diarizer** — runs on the system-audio track, produces time-ranged speaker
-  clusters; merge step aligns Whisper segments with clusters by time overlap →
+  clusters; merge step snaps cluster edges to inter-word silences, then aligns
+  Whisper segments with clusters by time overlap →
   `[00:12:34] Me: … / Speaker 2: …`.
 - **Summarizer** — a "transcript → markdown" protocol + prompt template (summary,
-  agreements, "my tasks" checklist, speaker-name mapping). Implementation #1 shells
-  out to `claude -p`.
+  agreements, "my tasks" checklist, speaker-name mapping, turn-level speaker
+  corrections). Implementation #1 shells out to `claude -p`.
 
 macOS permissions: Microphone + System Audio Recording (`NSAudioCaptureUsageDescription`,
 required by the Core Audio tap) — onboarding flow on first launch. No Screen
@@ -151,8 +165,9 @@ During the call:
 After Stop:
 4. Final STT pass per track; diarization on the system track; merge by time overlap
    → `transcript.md` with `Me / Speaker N` labels.
-5. Transcript → Summarizer → `summary.md` + inferred speaker names; names are
-   applied to the transcript, manual rename available in the UI.
+5. Transcript → Summarizer → `summary.md` + inferred speaker names + turn-level
+   speaker corrections; both are applied to the transcript, manual rename
+   available in the UI.
 6. Window shows transcript + summary; "copy / export / open folder" actions.
 
 ## Storage
@@ -162,8 +177,9 @@ After Stop:
   mic.wav  system.wav  transcript.md  summary.md  meta.json
 ```
 
-`meta.json` holds call metadata and the speaker-label → name mapping (inferred or
-manually set). In-app history = a listing of this folder. Setting: "delete audio
+`meta.json` holds call metadata, the speaker-label → name mapping (inferred or
+manually set), and the LLM's turn-level speaker corrections. In-app history = a
+listing of this folder. Setting: "delete audio
 after successful transcription".
 
 ## Error handling
