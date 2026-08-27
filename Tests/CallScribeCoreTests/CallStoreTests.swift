@@ -66,6 +66,48 @@ private func tempRoot() -> URL {
     #expect(try store.listCalls().isEmpty)
 }
 
+@Test func moveCarriesTheWholeFolderToTheOtherStore() throws {
+    let sourceRoot = tempRoot(), targetRoot = tempRoot()
+    defer {
+        try? FileManager.default.removeItem(at: sourceRoot)
+        try? FileManager.default.removeItem(at: targetRoot)
+    }
+    let source = CallStore(rootURL: sourceRoot)
+    let target = CallStore(rootURL: targetRoot)   // root doesn't exist yet — move creates it
+    let folder = try source.createCallFolder(startedAt: Date(timeIntervalSince1970: 1_790_000_000))
+    try Data("{}".utf8).write(to: folder.url.appendingPathComponent("meta.json"))
+    try Data("audio".utf8).write(to: folder.micWAV)
+    try FileManager.default.createDirectory(at: folder.cacheDir, withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: folder.whisperMicJSON)
+
+    let moved = try source.move(folder, to: target)
+
+    #expect(moved.name == folder.name)
+    #expect(!FileManager.default.fileExists(atPath: folder.url.path))
+    #expect(FileManager.default.fileExists(atPath: moved.micWAV.path))
+    #expect(FileManager.default.fileExists(atPath: moved.whisperMicJSON.path))
+    #expect(try source.listCalls().isEmpty)
+    #expect(try target.listCalls().map(\.name) == [moved.name])
+}
+
+@Test func moveIntoANameCollisionGetsASuffix() throws {
+    let sourceRoot = tempRoot(), targetRoot = tempRoot()
+    defer {
+        try? FileManager.default.removeItem(at: sourceRoot)
+        try? FileManager.default.removeItem(at: targetRoot)
+    }
+    let source = CallStore(rootURL: sourceRoot)
+    let target = CallStore(rootURL: targetRoot)
+    let folder = try source.createCallFolder(startedAt: Date(timeIntervalSince1970: 1_790_000_000))
+    try Data("{}".utf8).write(to: folder.url.appendingPathComponent("meta.json"))
+    // The same minute already exists in the target project.
+    try FileManager.default.createDirectory(
+        at: targetRoot.appendingPathComponent(folder.name), withIntermediateDirectories: true)
+
+    let moved = try source.move(folder, to: target)
+    #expect(moved.name == "\(folder.name)-2")
+}
+
 @Test func metaRoundTrip() throws {
     let root = tempRoot()
     defer { try? FileManager.default.removeItem(at: root) }

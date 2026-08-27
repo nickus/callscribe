@@ -259,8 +259,10 @@ private func span(_ id: String, _ start: Double, _ end: Double) -> SpeakerSpan {
         // A 1-word mic blip that Whisper timed just outside a remote word is echo
         // residue → dropped. A 1-word backchannel in real silence is kept.
         let t = TranscriptMerger.merge(
-            micWords: [w("ага", 10.3, 10.6),    // right after remote speech → residue
-                       w("да", 30.0, 30.4)],     // in silence → genuine
+            micWords: [
+                w("ага", 10.3, 10.6),   // right after remote speech → residue
+                w("да", 30.0, 30.4),    // in silence → genuine
+            ],
             systemWords: [w("бесконечная", 5.0, 10.0)],
             spans: [span("A", 5, 10)]
         )
@@ -378,7 +380,7 @@ private func span(_ id: String, _ start: Double, _ end: Double) -> SpeakerSpan {
     }
 
     @Test func emptyTranscriptRendersEmpty() {
-        #expect(TranscriptMarkdownRenderer.render(Transcript(utterances: [])) == "")
+        #expect(TranscriptMarkdownRenderer.render(Transcript(utterances: [])).isEmpty)
     }
 }
 

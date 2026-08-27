@@ -5,7 +5,7 @@ import Testing
 /// The canned summarizer used throughout tests and the golden pipeline.
 struct MockSummarizer: Summarizer {
     let result: SummaryResult
-    func summarize(transcript: String) async throws -> SummaryResult { result }
+    func summarize(transcript: String, projectContext: String?) async throws -> SummaryResult { result }
 }
 
 @Suite struct SummarizerProtocolTests {

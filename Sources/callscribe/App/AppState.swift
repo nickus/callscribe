@@ -1,3 +1,4 @@
+import AppKit
 import CallScribeCore
 import CallScribeEngine
 import Foundation
@@ -48,6 +49,24 @@ final class AppState {
     private var parked: [ProcessingJob] = []
     /// Provisioning state of the transcription model (seeded in `init`).
     private(set) var modelState: ModelState = .ready
+    /// The STT engine for calls and dictation, persisted across launches.
+    /// Switching provisions the new engine right away (a no-op when its model
+    /// is already on disk), so the first call after the switch doesn't stall.
+    var sttEngine: STTEngine = STTEngine.current() {
+        didSet {
+            guard sttEngine != oldValue else { return }
+            sttEngine.persist()
+            Log.shared.info("stt engine switched to \(sttEngine.rawValue)")
+            if ModelProvisioner.isReady(engine: sttEngine, modelsDir: AppPaths.modelsDirectory) {
+                modelState = .ready
+                // Jobs parked because the OLD engine wasn't provisioned can run
+                // now — nothing else re-admits them until the next recording.
+                drainQueue()
+            } else {
+                provisionModels()
+            }
+        }
+    }
     /// Stage of a per-call action in flight, by call — foreground work, shown in
     /// that call's status bar only (see `statusJob(for:)`).
     private var actionStages: [String: PipelineRunner.Stage] = [:]
@@ -102,7 +121,7 @@ final class AppState {
         selectedProjectID = state.selectedID
         // Checked synchronously: an async seed would flash the download chip on
         // every launch of an already-provisioned install.
-        if !ModelProvisioner.isWhisperReady(modelsDir: AppPaths.modelsDirectory) {
+        if !ModelProvisioner.isReady(engine: sttEngine, modelsDir: AppPaths.modelsDirectory) {
             provisionModels()
         }
         refreshHistory()
@@ -182,7 +201,7 @@ final class AppState {
                     store: store,
                     startedAt: started,
                     appVersion: AppInfo.version,
-                    onStall: { Task { @MainActor in self.handleStall() } }
+                    onStall: { reason in Task { @MainActor in self.handleStall(reason: reason) } }
                 )
                 try session.start()
                 self.session = session
@@ -225,11 +244,12 @@ final class AppState {
         phase = .idle
     }
 
-    private func handleStall() {
+    private func handleStall(reason: String) {
         guard isRecording else { return }
-        // The system-audio tap going silent ends the call early — worth finding
-        // afterwards, since the recording just stops with no visible reason.
-        Log.shared.warn("recording: capture stalled, ending the session early")
+        // Fires only after per-track capture restarts failed on BOTH tracks —
+        // worth finding afterwards, since the recording just stops with no
+        // visible reason. The reason separates dead capture from failing writes.
+        Log.shared.warn("recording: capture unrecoverable (\(reason)), ending the session early")
         stopRecording()
     }
 
@@ -314,6 +334,7 @@ final class AppState {
                         // The call's own project directory (robust to switching).
                         summarizer: ClaudeCLISummarizer(
                             workingDirectory: job.folder.url.deletingLastPathComponent()),
+                        engine: sttEngine,
                         project: projectName(of: job.folder)
                     )
                     try await runner.run { stage in
@@ -350,7 +371,10 @@ final class AppState {
         var job = processing.remove(at: i)
         job.stage = .waitingForModel   // set explicitly: nil would read "Queued…"
         parked.append(job)
-        Log.shared.warn("queue: parked [\(projectName(of: job.folder) ?? "?")] \(job.folder.name) until the model is provisioned")
+        Log.shared.warn("""
+            queue: parked [\(projectName(of: job.folder) ?? "?")] \(job.folder.name) \
+            until the model is provisioned
+            """)
     }
 
     /// Re-admit parked jobs, at the front so FIFO order survives. Keyed off actual
@@ -358,7 +382,7 @@ final class AppState {
     /// the CLI, or by an attempt this state already gave up on.
     private func admitParked() {
         guard !parked.isEmpty,
-              ModelProvisioner.isWhisperReady(modelsDir: AppPaths.modelsDirectory)
+              ModelProvisioner.isReady(engine: sttEngine, modelsDir: AppPaths.modelsDirectory)
         else { return }
         Log.shared.info("queue: re-admitting \(parked.count) parked call(s) — model is ready")
         processing.insert(contentsOf: parked, at: 0)
@@ -372,18 +396,28 @@ final class AppState {
     /// doubles as the Retry action.
     func provisionModels() {
         modelState = .downloading(nil)   // never render a retry under a stale error
+        // Captured so a mid-download engine switch orphans this task cleanly:
+        // its progress, success, and failure all stop touching modelState the
+        // moment it stops being the selected engine's download.
+        let engine = sttEngine
         Task {
             do {
                 let dir = try AppPaths.ensureModelsDirectory()
                 try await ModelProvisioner.shared.ensureReady(
                     modelsDir: dir,
+                    engine: engine,
                     onProgress: { fraction in
-                        Task { @MainActor in self.modelState = .downloading(fraction) }
+                        Task { @MainActor in
+                            guard self.sttEngine == engine else { return }
+                            self.modelState = .downloading(fraction)
+                        }
                     })
+                guard sttEngine == engine else { return }
                 modelState = .ready
                 admitParked()
                 drainQueue()
             } catch {
+                guard sttEngine == engine else { return }
                 modelState = .failed(error.localizedDescription)
                 // ModelProvisioner logs the cause; this records that the UI gave up.
                 Log.shared.error("provisioning: reported as failed to the user")
@@ -396,8 +430,7 @@ final class AppState {
     /// recording status.
     func rename(_ label: String, to name: String, in folder: CallFolder) async throws {
         var meta = try folder.loadMeta()
-        if name.isEmpty { meta.speakerNames[label] = nil }
-        else { meta.speakerNames[label] = name }
+        if name.isEmpty { meta.speakerNames[label] = nil } else { meta.speakerNames[label] = name }
         try folder.saveMeta(meta)
         let runner = PipelineRunner(
             folder: folder,
@@ -417,6 +450,73 @@ final class AppState {
         _ = try CallTrimmer.trim(folder, from: start, to: end)
         enqueueProcessing(folder)
         refreshHistory()
+    }
+
+    /// Re-run the whole pipeline on this call with the currently selected STT
+    /// engine — transcript, speakers and summary are all downstream of the
+    /// words. Corrections that survive a Trim survive here too; timecode-keyed
+    /// speaker corrections don't (the words they point at are about to change).
+    func retranscribe(_ folder: CallFolder) throws {
+        try ensureIdle(folder, action: "re-transcribing")
+        var meta = try folder.loadMeta()
+        var pipeline = CallMeta.PipelineState()
+        pipeline.echoCanceled = meta.pipeline.echoCanceled   // engine-independent
+        meta.pipeline = pipeline
+        meta.speakerCorrections = nil
+        try folder.saveMeta(meta)
+        enqueueProcessing(folder)
+        refreshHistory()
+    }
+
+    /// Move a call to another project (a personal call recorded into the work
+    /// project by mistake). Blocked while the pipeline holds the folder —
+    /// moving it mid-run would strand the runner's paths.
+    func move(_ folder: CallFolder, toProjectID id: String) throws {
+        try ensureIdle(folder, action: "moving")
+        guard let target = projects.first(where: { $0.id == id }) else { return }
+        try store.move(folder, to: CallStore(rootURL: target.rootURL))
+        Log.shared.info("moved \(folder.name) [\(selectedProject.name)] → [\(target.name)]")
+        refreshHistory()
+    }
+
+    /// A call must be untouched by the pipeline AND not the live recording
+    /// before destructive per-call actions run — both would strand open paths.
+    private func ensureIdle(_ folder: CallFolder, action: String) throws {
+        struct Busy: LocalizedError {
+            let errorDescription: String?
+        }
+        if isProcessing(folder) {
+            throw Busy(errorDescription: "Wait for processing to finish before \(action) this call.")
+        }
+        if let session, Self.key(session.folder) == Self.key(folder) {
+            throw Busy(errorDescription: "Stop the recording before \(action) this call.")
+        }
+    }
+
+    /// Open the project's context.md (glossary/terms fed to the summarizer),
+    /// creating a template on first use. Plain file, user's own editor.
+    func openProjectContext() {
+        let url = selectedProject.rootURL.appendingPathComponent("context.md")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            let template = """
+            # Project context
+
+            Anything written here is given to the summarizer with every call in
+            this project: glossary terms, product and people names, spellings.
+            It uses them to name topics correctly and to fix misheard terms in
+            the transcript.
+
+            ## Glossary
+
+            - Term — what it means
+
+            ## People
+
+            - Name — role
+            """
+            try? template.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
     }
 
     /// Names of all currently-enrolled voices (for the UI to show "forget").

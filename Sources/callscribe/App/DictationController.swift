@@ -154,7 +154,10 @@ final class DictationController {
         // The reason dictation feels quick: the first model load (5–10 s) runs
         // while the user is still talking rather than after they stop. Errors are
         // ignored here — `transcribe` re-runs `prepare` and reports them properly.
-        Task { try? await DictationTranscriber.shared.prepare(modelsDir: AppPaths.modelsDirectory) }
+        Task {
+            try? await DictationTranscriber.shared.prepare(
+                modelsDir: AppPaths.modelsDirectory, engine: STTEngine.current())
+        }
     }
 
     private func finish() {
@@ -208,7 +211,8 @@ final class DictationController {
             (text, language) = try await DictationTranscriber.shared.transcribe(
                 wav: url,
                 language: nil,          // auto-detect, as the call pipeline does
-                modelsDir: try AppPaths.ensureModelsDirectory()
+                modelsDir: try AppPaths.ensureModelsDirectory(),
+                engine: STTEngine.current()   // the tray picker's choice
             )
         } catch {
             hud.flash(.failure(error.localizedDescription), for: 4)
@@ -237,7 +241,10 @@ final class DictationController {
             Log.shared.info("dictation: \(String(format: "%.1f", duration)) s → \(text.count) chars pasted")
         case .copiedOnly(let reason):
             hud.flash(.failure(reason), for: 4)
-            Log.shared.warn("dictation: \(String(format: "%.1f", duration)) s → \(text.count) chars copied only: \(reason)")
+            Log.shared.warn("""
+                dictation: \(String(format: "%.1f", duration)) s → \
+                \(text.count) chars copied only: \(reason)
+                """)
         }
     }
 }

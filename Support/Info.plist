@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>CallScribe</string>
 	<key>CFBundleExecutable</key>
 	<string>callscribe</string>
 	<key>CFBundleIconFile</key>
@@ -14,23 +16,21 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>CallScribe</string>
-	<key>CFBundleDisplayName</key>
-	<string>CallScribe</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.4.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>4</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<false/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>CallScribe records system audio during calls to transcribe remote participants.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>CallScribe records your microphone during calls to produce the transcript.</string>
-	<key>NSAudioCaptureUsageDescription</key>
-	<string>CallScribe records system audio during calls to transcribe remote participants.</string>
 </dict>
 </plist>

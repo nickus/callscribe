@@ -28,7 +28,10 @@ public struct DictationLog: Sendable {
         do {
             try appendThrowing(DictationLogFormat.render(trimmed, at: date, language: language))
         } catch {
-            Log.shared.warn("dictation: could not append to the dictation log: \(Log.truncated(error.localizedDescription))")
+            Log.shared.warn("""
+                dictation: could not append to the dictation log: \
+                \(Log.truncated(error.localizedDescription))
+                """)
         }
     }
 

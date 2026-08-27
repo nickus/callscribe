@@ -20,38 +20,38 @@ struct RecordCommand: AsyncParsableCommand {
             throw AudioCaptureError.microphoneAccessDenied
         }
 
+        // One stop channel with three producers: Ctrl-C, the --duration timer,
+        // and unrecoverable capture (which used to print "stopping" while the
+        // CLI happily kept recording two dead tracks).
+        let (stopped, stop) = AsyncStream.makeStream(of: Void.self)
+
         let session = try RecordingSession(
             store: CallStore(),
             startedAt: Date(),
             appVersion: AppInfo.version,
             language: language,
-            onStall: { print("\n⚠️  capture stalled — stopping; recording so far is kept") }
+            onStall: { reason in
+                print("\n⚠️  capture unrecoverable (\(reason)) — stopping; recording so far is kept")
+                stop.yield()
+            }
         )
         try session.start()
         print("● Recording to \(session.folder.url.path)")
         print("  play the call audio; press Ctrl-C to stop.")
 
+        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        signal(SIGINT, SIG_IGN)
+        sigint.setEventHandler { stop.yield() }
+        sigint.resume()
         if let duration {
-            try await Task.sleep(for: .seconds(duration))
-        } else {
-            await waitForInterrupt()
+            DispatchQueue.global().asyncAfter(deadline: .now() + duration) { stop.yield() }
         }
+        for await _ in stopped { break }
+        sigint.cancel()
 
         let folder = try session.stop()
         let meta = try folder.loadMeta()
         print("■ Stopped. \(String(format: "%.1f", meta.durationSec ?? 0)) s recorded.")
         print("  Next: callscribe pipeline \(folder.url.path)")
-    }
-
-    private func waitForInterrupt() async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-            signal(SIGINT, SIG_IGN)
-            source.setEventHandler {
-                source.cancel()
-                continuation.resume()
-            }
-            source.resume()
-        }
     }
 }

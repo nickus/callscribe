@@ -3,7 +3,9 @@
 Local, on-device call transcription for macOS (Apple Silicon). Records your
 microphone and the system audio of a call on two separate tracks, strips the
 remote voices that bleed from the speakers into the mic (SpeexDSP echo
-cancellation), transcribes both fully offline with WhisperKit, diarizes remote
+cancellation), transcribes both fully offline — WhisperKit by default, or
+NVIDIA Parakeet TDT v3 (several-fold faster, a third of the size) selectable
+from the tray menu — diarizes remote
 participants with FluidAudio, merges everything into a timecoded per-speaker
 transcript, and produces a summary + action-item checklist via the local
 `claude -p` CLI — the same LLM pass names the speakers and repairs turns the
@@ -81,7 +83,7 @@ The same binary is also a CLI, so every pipeline stage is testable without the U
 
 ```sh
 callscribe record [--duration N] [--language ru|en]   # record a call
-callscribe pipeline <call-folder>                     # echocancel→transcribe→diarize→merge→summarize (resumable)
+callscribe pipeline <call-folder> [--engine parakeet] # echocancel→transcribe→diarize→merge→summarize (resumable)
 callscribe echocancel|transcribe|diarize|merge|summarize <folder>  # individual stages
 callscribe enroll <folder> "Speaker 2" Misha          # learn a voice; future calls name it automatically
 callscribe dictate [--seconds N] [--paste]            # dictation without the hotkey
@@ -102,6 +104,7 @@ Nothing is written outside `~/Library` and the project folders you pick yourself
 |---|---|---|
 | `Models/models/argmaxinc/whisperkit-coreml/<variant>/` | ~1.5 GB | `argmaxinc/whisperkit-coreml` |
 | `Models/models/openai/whisper-large-v3/` (tokenizer) | 2.7 MB | `openai/whisper-large-v3` |
+| `Models/parakeet-tdt-0.6b-v3/` (only if selected) | ~0.5 GB | `FluidInference/parakeet-tdt-0.6b-v3-coreml` |
 | `Models/speaker-diarization/` | 21 MB | `FluidInference/speaker-diarization-coreml` |
 | `speaker-diarization/` | 13 MB | same repo, legacy file names |
 
@@ -114,6 +117,8 @@ diarizer run if you delete them.
 **Created by the app:**
 
 - `projects.json` — project list and selection; `voices.json` — enrolled voice embeddings
+- `context.md` in a project's folder (toolbar → Context) — glossary/terms the
+  summarizer uses to name topics correctly and fix misheard terms in the transcript
 - `dictations.md` — every dictation, as a timestamped Markdown entry. Unlike the
   diagnostics log this holds **content**: the dictated text itself. That's why it
   lives here and not in `~/Library/Logs`, which `sysdiagnose` collects. Prune it
@@ -163,5 +168,9 @@ one part with real consequences for every keystroke you type is unit-tested.
 ## Status
 
 MVP (design Phase 1). No live draft yet. See `scripts/smoke.md` for manual QA.
-Known limitation: if the system output device changes mid-call (e.g. AirPods
-connect), the tap can go silent; the stall watchdog ends the session cleanly.
+Audio-device changes mid-call (AirPods connecting, switching away, flipping
+profiles) are survived: the tap and the mic engine are rebuilt on the new
+route, the gap is padded with silence so the tracks stay aligned, and the
+stream format is tracked so a rate flip can't corrupt a track. A track that
+can't be revived is abandoned — the session keeps recording the other one and
+ends only when both are dead.

@@ -22,8 +22,8 @@ private func readUInt32LE(_ data: Data, at offset: Int) -> UInt32 {
 
     let data = try Data(contentsOf: url)
     #expect(data.count == 44 + 3200)
-    #expect(String(decoding: data.prefix(4), as: UTF8.self) == "RIFF")
-    #expect(String(decoding: data.subdata(in: 8..<12), as: UTF8.self) == "WAVE")
+    #expect(String(bytes: data.prefix(4), encoding: .utf8) == "RIFF")
+    #expect(String(bytes: data.subdata(in: 8..<12), encoding: .utf8) == "WAVE")
     #expect(readUInt32LE(data, at: 4) == 36 + 3200)   // RIFF chunk size
     #expect(readUInt32LE(data, at: 24) == 16000)       // sample rate
     #expect(readUInt32LE(data, at: 40) == 3200)        // data chunk size

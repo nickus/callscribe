@@ -99,7 +99,9 @@ struct CallDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes the whole folder — audio, transcript, summary and everything else for this call.")
+            Text(
+                "This permanently removes the whole folder — audio, transcript, "
+                    + "summary and everything else for this call.")
         }
     }
 
@@ -212,7 +214,36 @@ struct CallDetailView: View {
             .disabled(busy || transcript.isEmpty || state.isProcessing(call.folder))
             .pointerCursor()
 
+            // Redo everything from the words up with the engine currently
+            // selected in the tray — the way to apply an engine switch (or a
+            // fresh glossary) to an already-recorded call.
+            Button {
+                run { try state.retranscribe(call.folder) }
+            } label: {
+                Label("Re-transcribe", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(SoftButtonStyle())
+            .disabled(busy || state.isProcessing(call.folder))
+            .help("Re-run transcription, speakers and summary with the selected engine")
+            .pointerCursor()
+
             Spacer()
+
+            if state.projects.count > 1 {
+                Menu {
+                    ForEach(state.projects.filter { $0.id != state.selectedProjectID }) { project in
+                        Button(project.name) {
+                            run { try state.move(call.folder, toProjectID: project.id) }
+                        }
+                    }
+                } label: {
+                    Label("Move to", systemImage: "arrowshape.turn.up.right")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(busy || state.isProcessing(call.folder))
+                .help("Move this call to another project")
+            }
 
             // Pick up an interactive Claude Code session in the project folder.
             Button {
@@ -350,15 +381,16 @@ struct CallDetailView: View {
                 trimRow(
                     label: "End",
                     value: trimEndEffective,
-                    set: { trimEnd = max(player.currentTime, trimStart + 1) }
-                ) {
-                    Button("Reset") {
-                        trimStart = 0
-                        trimEnd = nil
+                    set: { trimEnd = max(player.currentTime, trimStart + 1) },
+                    extra: {
+                        Button("Reset") {
+                            trimStart = 0
+                            trimEnd = nil
+                        }
+                        .buttonStyle(SoftButtonStyle())
+                        .disabled(!hasTrim)
                     }
-                    .buttonStyle(SoftButtonStyle())
-                    .disabled(!hasTrim)
-                }
+                )
             }
 
             Text(trimSummaryText)
@@ -519,10 +551,19 @@ struct CallDetailView: View {
     static func loadTurns(folder: CallFolder, transcript: String, names: [String: String]) -> [Turn] {
         if let data = try? Data(contentsOf: folder.turnsJSON),
            let t = try? JSONDecoder().decode(Transcript.self, from: data) {
+            // turns.json holds raw utterance text — glossary term fixes are
+            // applied at display time, same as transcript.md gets at render
+            // time, so the two views of the call never disagree.
+            let replacements = (try? folder.loadMeta())?.textReplacements ?? []
             return t.utterances.enumerated().map { i, u in
-                Turn(id: i, start: u.start, end: u.end, label: u.speaker.label, text: u.text)
+                Turn(
+                    id: i, start: u.start, end: u.end, label: u.speaker.label,
+                    text: TextReplacement.apply(replacements, to: u.text)
+                )
             }
         }
+        // The transcript.md fallback needs no pass — replacements are already
+        // baked into the rendered markdown.
         let reverse = Dictionary(names.map { ($0.value, $0.key) }, uniquingKeysWith: { first, _ in first })
         return TranscriptParse.parse(transcript).enumerated().map { i, p in
             let words = p.text.split(separator: " ").count

@@ -13,7 +13,7 @@ TEST_FLAGS := -Xswiftc -F$(DEVDIR)/Frameworks \
               -Xlinker -rpath -Xlinker $(DEVDIR)/Frameworks \
               -Xlinker -rpath -Xlinker $(DEVDIR)/usr/lib
 
-.PHONY: build app run install test golden cert clean icon
+.PHONY: build app run install test lint golden cert clean icon
 
 build:
 	swift build -c release
@@ -41,7 +41,12 @@ install: app
 	rm -rf ~/Applications/CallScribe.app
 	cp -R $(APP) ~/Applications/CallScribe.app
 
-test:
+# Strict: every warning fails. Config in .swiftlint.yml.
+lint:
+	@command -v swiftlint >/dev/null || { echo "swiftlint not installed — brew install swiftlint"; exit 1; }
+	swiftlint lint --quiet --strict
+
+test: lint
 	swift test $(TEST_FLAGS)
 
 golden:

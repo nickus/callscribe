@@ -18,8 +18,10 @@ private func makeProcessedCall(seconds: Int = 4) throws -> CallFolder {
     }
     try Data("transcript".utf8).write(to: folder.transcriptMD)
     try Data("summary".utf8).write(to: folder.summaryMD)
-    for artifact in [folder.micCleanWAV, folder.whisperMicJSON, folder.whisperSystemJSON,
-                     folder.diarizationJSON, folder.turnsJSON] {
+    for artifact in [
+        folder.micCleanWAV, folder.whisperMicJSON, folder.whisperSystemJSON,
+        folder.diarizationJSON, folder.turnsJSON,
+    ] {
         try Data("stale".utf8).write(to: artifact)
     }
 

@@ -23,8 +23,12 @@ public enum ProbeRunner {
                 .appendingPathComponent("callscribe-probe-\(stamp)")
 
         let sessionStart = mach_absolute_time()
-        let micSink = try TrackSink(url: dir.appendingPathComponent("mic.wav"), label: "mic", sessionStartHostTime: sessionStart)
-        let systemSink = try TrackSink(url: dir.appendingPathComponent("system.wav"), label: "system", sessionStartHostTime: sessionStart)
+        let micSink = try TrackSink(
+            url: dir.appendingPathComponent("mic.wav"), label: "mic",
+            sessionStartHostTime: sessionStart)
+        let systemSink = try TrackSink(
+            url: dir.appendingPathComponent("system.wav"), label: "system",
+            sessionStartHostTime: sessionStart)
 
         // System tap first: it owns the riskier TCC prompt.
         let systemRecorder = SystemAudioTapRecorder(sink: systemSink)

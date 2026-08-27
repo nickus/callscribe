@@ -64,6 +64,14 @@ struct MainWindowView: View {
                     .help("Create a new project")
                     .pointerCursor()
 
+                    Button {
+                        state.openProjectContext()
+                    } label: {
+                        Label("Context", systemImage: "text.book.closed")
+                    }
+                    .help("Edit this project's glossary — the summarizer uses it to fix and name terms")
+                    .pointerCursor()
+
                     // Its own window — dictations aren't scoped to the project
                     // these buttons select.
                     Button {

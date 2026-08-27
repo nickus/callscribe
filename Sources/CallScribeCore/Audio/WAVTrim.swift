@@ -92,7 +92,7 @@ public enum WAVTrim {
 
         var sampleRate: UInt32?
         while let header = try handle.read(upToCount: 8), header.count == 8 {
-            let id = String(decoding: header.prefix(4), as: UTF8.self)
+            let id = String(bytes: header.prefix(4), encoding: .utf8) ?? ""
             let size = Int(header.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) })
             let bodyStart = try handle.offset()
 

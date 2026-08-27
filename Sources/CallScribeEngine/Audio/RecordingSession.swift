@@ -29,7 +29,8 @@ public final class RecordingSession: @unchecked Sendable {
 
     private var meta: CallMeta
     private var stopped = false
-    private let onStall: (@Sendable () -> Void)?
+    private let onStall: (@Sendable (String) -> Void)?
+    private let log: Log
     private var watchdog: DispatchSourceTimer?
     private let watchdogQueue = DispatchQueue(label: "callscribe.watchdog")
 
@@ -38,7 +39,8 @@ public final class RecordingSession: @unchecked Sendable {
         startedAt: Date,
         appVersion: String,
         language: String? = nil,
-        onStall: (@Sendable () -> Void)? = nil
+        log: Log = .shared,
+        onStall: (@Sendable (String) -> Void)? = nil
     ) throws {
         let available = try DiskSpace.availableBytes(at: store.rootURL.deletingLastPathComponent())
         guard available >= DiskSpace.minimumBytesForRecording else {
@@ -48,6 +50,7 @@ public final class RecordingSession: @unchecked Sendable {
         self.folder = try store.createCallFolder(startedAt: startedAt)
         self.appVersion = appVersion
         self.language = language
+        self.log = log
         self.onStall = onStall
         // Shared clock zero for both tracks (see TrackSink lead-in silence).
         let sessionStart = mach_absolute_time()
@@ -81,39 +84,72 @@ public final class RecordingSession: @unchecked Sendable {
 
         micRecorder.stop()
         systemRecorder.stop()
-        try micSink.finish()
-        try systemSink.finish()
+        // Finish BOTH sinks even when the first throws — the second file would
+        // otherwise be left with an unfinalized header and a leaked handle.
+        let micResult = Result { try micSink.finish() }
+        let systemResult = Result { try systemSink.finish() }
 
         meta.endedAt = Date()
         meta.durationSec = max(micSink.duration, systemSink.duration)
         meta.micStartOffsetSec = micSink.startOffsetSec
         meta.systemStartOffsetSec = systemSink.startOffsetSec
         try folder.saveMeta(meta)
+        try micResult.get()
+        try systemResult.get()
         return folder
     }
 
-    /// Fire `onStall` if neither track advances for 5 s (device unplugged,
-    /// permission revoked mid-call). The disk files are always preserved.
+    /// Watch both tracks for stalls (StallDetector holds the tested rules): a
+    /// stalled track gets its capture rebuilt; a track that stays dead is
+    /// abandoned and the session continues on the other; only both-dead fires
+    /// `onStall`. Durations are read via lock-free mirrors — `queue.sync`
+    /// here could block behind the wedged write the watchdog must detect.
+    /// The disk files are always preserved.
     private func startWatchdog() {
-        var lastMax = 0.0
-        var idleTicks = 0
+        var detector = StallDetector()
         let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            let current = max(micSink.duration, systemSink.duration)
-            if current > lastMax {
-                lastMax = current
-                idleTicks = 0
-            } else {
-                idleTicks += 1
-                if idleTicks >= 5 {
-                    self.onStall?()
+            for event in detector.tick(mic: micSink.currentDuration, system: systemSink.currentDuration) {
+                switch event {
+                case .restart(let track):
+                    log.warn("recording: \(track.rawValue) track stalled — rebuilding its capture")
+                    restart(track)
+                case .trackLost(let track):
+                    let sink = track == .mic ? micSink : systemSink
+                    let detail = sink.latchedErrorDescription.map { " (write error: \($0))" } ?? ""
+                    log.error("""
+                        recording: \(track.rawValue) track is not coming back\(detail) — \
+                        continuing with the other track only
+                        """)
+                case .endSession:
+                    self.onStall?(self.stallDiagnosis())
                     timer.cancel()
                 }
             }
         }
         timer.resume()
         watchdog = timer
+    }
+
+    private func restart(_ track: StallDetector.Track) {
+        switch track {
+        case .mic: micRecorder.restart()
+        case .system: systemRecorder.restart()
+        }
+    }
+
+    /// Tell "no audio arriving" apart from "audio arriving, writes failing":
+    /// a latched sink error (disk trouble) used to be reported as a capture
+    /// stall, sending whoever read the log to debug the wrong subsystem.
+    private func stallDiagnosis() -> String {
+        let sinkErrors = [
+            micSink.latchedErrorDescription.map { "mic: \($0)" },
+            systemSink.latchedErrorDescription.map { "system: \($0)" },
+        ].compactMap { $0 }
+        return sinkErrors.isEmpty
+            ? "no audio arriving on either track"
+            : "track writes failing (disk?): \(sinkErrors.joined(separator: "; "))"
     }
 }

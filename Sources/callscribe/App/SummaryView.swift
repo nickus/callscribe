@@ -30,15 +30,16 @@ struct SummaryView: View {
                         title: section.title,
                         systemImage: Self.icon(for: section.title),
                         isExpanded: expansion(section.title),
-                        onCopy: { copyToPasteboard(Self.plainText(section)) }
-                    ) {
-                        VStack(alignment: .leading, spacing: Spacing.md) {
-                            blocks(section.blocks)
-                            if !section.subsections.isEmpty {
-                                topicRows(section.subsections)
+                        onCopy: { copyToPasteboard(Self.plainText(section)) },
+                        content: {
+                            VStack(alignment: .leading, spacing: Spacing.md) {
+                                blocks(section.blocks)
+                                if !section.subsections.isEmpty {
+                                    topicRows(section.subsections)
+                                }
                             }
                         }
-                    }
+                    )
                 }
             }
         }
@@ -76,8 +77,7 @@ struct SummaryView: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.15)) {
-                    if isOpen { expandedTopics.remove(topic.title) }
-                    else { expandedTopics.insert(topic.title) }
+                    if isOpen { expandedTopics.remove(topic.title) } else { expandedTopics.insert(topic.title) }
                 }
             }
             .pointerCursor()
@@ -174,6 +174,8 @@ struct SummaryView: View {
     static func bulletText(_ items: [String]) -> Text {
         var result = Text("")
         for (i, item) in items.enumerated() {
+            // SwiftUI.Text has + but no +=.
+            // swiftlint:disable:next shorthand_operator
             if i > 0 { result = result + Text("\n") }
             result = result + Text("•  ").foregroundColor(.secondary) + Text(.init(item))
         }

@@ -17,7 +17,7 @@ public struct TrackTranscription: Codable, Sendable {
 /// *serializing* calls remains the caller's job. Both callers do: the pipeline
 /// transcribes its two tracks one after the other, and `DictationTranscriber`
 /// is an actor.
-public final class WhisperTranscriber: @unchecked Sendable {
+public final class WhisperTranscriber: SpeechTranscriber, @unchecked Sendable {
     public static let defaultModel = "openai_whisper-large-v3-v20240930_turbo"
 
     private let whisperKit: WhisperKit

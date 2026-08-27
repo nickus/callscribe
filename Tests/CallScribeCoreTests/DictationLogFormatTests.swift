@@ -212,7 +212,7 @@ private func stamp(_ text: String) -> Date? {
     #expect(DictationLogFormat.remove(sample, index: 3) == sample)
     #expect(DictationLogFormat.remove(sample, index: 99) == sample)
     #expect(DictationLogFormat.remove(sample, index: -1) == sample)
-    #expect(DictationLogFormat.remove("", index: 0) == "")
+    #expect(DictationLogFormat.remove("", index: 0).isEmpty)
 }
 
 /// Only the removed entry's lines change; everything else stays byte-identical,

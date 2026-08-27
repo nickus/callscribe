@@ -46,7 +46,9 @@ struct CallsColumn: View {
             }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { _ in
-            Text("This permanently removes the whole folder — audio, transcript, summary and everything else for this call.")
+            Text(
+                "This permanently removes the whole folder — audio, transcript, "
+                    + "summary and everything else for this call.")
         }
     }
 

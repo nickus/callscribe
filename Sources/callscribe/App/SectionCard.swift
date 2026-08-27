@@ -8,7 +8,7 @@ struct SectionCard<Content: View>: View {
     let systemImage: String
     @Binding var isExpanded: Bool
     /// When set, a copy button appears in the header.
-    var onCopy: (() -> Void)? = nil
+    var onCopy: (() -> Void)?
     @ViewBuilder var content: () -> Content
 
     var body: some View {

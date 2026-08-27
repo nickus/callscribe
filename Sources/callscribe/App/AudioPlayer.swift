@@ -101,7 +101,7 @@ final class CallAudioPlayer {
     }
 
     func togglePlayPause() {
-        isPlaying ? pause() : play()
+        if isPlaying { pause() } else { play() }
     }
 
     func play() {

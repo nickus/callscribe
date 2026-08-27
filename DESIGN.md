@@ -37,6 +37,14 @@ Speech recognition must run strictly on-device, no network.
    aggregate device can't be read via AVAudioEngine — IOProc callbacks only.)*
 3. **WhisperKit** as the STT engine: live draft via streaming on a small model
    (base/small), final pass in batch mode on `large-v3-turbo`, each track separately.
+   A second engine is user-selectable from the tray: **NVIDIA Parakeet TDT 0.6B v3**
+   (FluidAudio's CoreML port — the diarizer dependency already ships it), several-fold
+   faster at a third of the disk/memory, multilingual incl. Russian, token timings at
+   80 ms granularity feeding the same merge. Whisper stays the default: it is stronger
+   on code-switched ru/en speech and reports the detected language (Parakeet doesn't).
+   The `SpeechTranscriber` protocol keeps the pipeline and dictation engine-agnostic;
+   the choice is stored in UserDefaults (`stt.engine`) and applies to new work only —
+   meta.json records which model transcribed each call.
 4. **Diarization of remote participants in the MVP**: FluidAudio (pyannote models on
    CoreML, on-device) clusters voices on the system-audio track into `Speaker 1/2/3`.
    Known limits: labels are anonymous (not names), and boundaries degrade on
@@ -58,6 +66,11 @@ Speech recognition must run strictly on-device, no network.
    original speaker (chains collapse, exact reverts cancel — replay order
    never matters). They survive every re-render; cleared when diarization
    re-runs and on Trim, whose new spans/timecodes they no longer describe.
+   A per-project `context.md` (glossary, people, terms — the toolbar's
+   Context button) rides along in the same prompt: the LLM uses its canonical
+   spellings and returns `replacements` — literal "misheard → canonical" text
+   fixes, applied at render time and content-keyed, so they survive trims and
+   even a re-transcription that repeats the same mistake.
 6. **Audio is the source of truth**: written to disk continuously from the first
    second; the transcript can always be regenerated. An app crash never loses a call.
 7. **Storage is plain folders, no DB**; Markdown is indexed by Spotlight (search for free).
@@ -115,6 +128,25 @@ Speech recognition must run strictly on-device, no network.
    working. Processing runs in the background so the next call can start
    recording immediately, and a Trim tool cuts dead air off a recording and
    re-runs the pipeline (user corrections — title, speaker names — survive).
+   A call recorded into the wrong project moves to another one (folder move,
+   collision-suffixed; blocked while the pipeline holds it), and Re-transcribe
+   redoes everything from the words up with the currently selected engine.
+14. **Capture survives route changes.** Bluetooth headsets switch away and flip
+   profiles (A2DP↔HFP) mid-call, and each flip can change the stream's sample
+   rate — wrapping tap buffers with a stale format is how a 40-minute call
+   once produced a half-speed system track. Three layers defend against it:
+   the tap's stream format lives behind a lock and is refreshed by a property
+   listener (the IOProc re-reads it per callback); TrackSink re-creates its
+   resampler whenever a buffer's format changes; and a default-output-device
+   listener rebuilds the tap + aggregate on the new route while the mic engine
+   restarts on `AVAudioEngineConfigurationChange`. Holes left while capture
+   was down are padded with silence, keeping the two tracks sample-aligned
+   for the echo canceller. The watchdog escalates per track (`StallDetector`,
+   a pure unit-tested state machine): restart the stalled track's capture,
+   abandon it after three failed restarts and continue on the other track —
+   a mic-only transcript beats none — and end the session only when both are
+   dead, reporting whether audio stopped arriving or writes started failing
+   (a latched disk error used to masquerade as a "capture stall").
 
 ## Architecture
 
@@ -184,8 +216,9 @@ after successful transcription".
 
 ## Error handling
 
-- Permission revoked / capture died mid-call → immediate notification; everything
-  recorded so far is kept.
+- Permission revoked / capture died mid-call → per-track restarts first; the
+  session ends (with everything recorded so far kept) only when both tracks
+  are beyond recovery, and the log says which failure mode it was.
 - No `claude` CLI / no network → transcript is still produced and saved (with
   anonymous speaker labels); the summary has a "retry" button. Transcription and
   diarization never depend on summarization.
@@ -199,6 +232,9 @@ after successful transcription".
 
 - Unit: merge logic — aligning word-timestamped Whisper segments with diarization
   clusters across two tracks (the core logic of the app).
+- Unit: capture resilience — the watchdog's escalation rules (`StallDetector`)
+  and TrackSink's format-following resampler + timeline gap padding, driven
+  with synthetic buffers and host times.
 - Golden test of the pipeline on a short two-track ru+en fixture with two remote
   speakers.
 - Summarizer is mocked in tests (including the name-mapping response).

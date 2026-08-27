@@ -50,4 +50,23 @@ public struct CallStore: Sendable {
     public func delete(_ folder: CallFolder) throws {
         try FileManager.default.removeItem(at: folder.url)
     }
+
+    /// Move a call's folder into another store (= another project), keeping
+    /// its name; a name collision in the destination gets the same numeric
+    /// suffix a colliding recording would. Everything the call owns travels
+    /// with the folder — audio, transcript, meta.json, `.cache/`.
+    @discardableResult
+    public func move(_ folder: CallFolder, to destination: CallStore) throws -> CallFolder {
+        try FileManager.default.createDirectory(
+            at: destination.rootURL, withIntermediateDirectories: true)
+        let base = folder.url.lastPathComponent
+        var candidate = destination.rootURL.appendingPathComponent(base)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = destination.rootURL.appendingPathComponent("\(base)-\(suffix)")
+            suffix += 1
+        }
+        try FileManager.default.moveItem(at: folder.url, to: candidate)
+        return CallFolder(url: candidate)
+    }
 }

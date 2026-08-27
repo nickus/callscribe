@@ -13,6 +13,7 @@ public actor PipelineRunner {
     private let folder: CallFolder
     private let modelsDir: URL
     private let summarizer: Summarizer?
+    private let engine: STTEngine
     private let whisperModel: String
     private let log: Log
     private let project: String
@@ -23,6 +24,7 @@ public actor PipelineRunner {
         folder: CallFolder,
         modelsDir: URL,
         summarizer: Summarizer?,
+        engine: STTEngine = .whisper,
         whisperModel: String = WhisperTranscriber.defaultModel,
         log: Log = .shared,
         project: String? = nil
@@ -30,6 +32,7 @@ public actor PipelineRunner {
         self.folder = folder
         self.modelsDir = modelsDir
         self.summarizer = summarizer
+        self.engine = engine
         self.whisperModel = whisperModel
         self.log = log
         // The display name when the caller knows it (the app), else the
@@ -96,6 +99,7 @@ public actor PipelineRunner {
             currentStage = .waitingForModel
             try await ModelProvisioner.shared.ensureReady(
                 modelsDir: modelsDir,
+                engine: engine,
                 model: whisperModel,
                 onStart: { [log, project, name = folder.name] in
                     onStage?(.waitingForModel)
@@ -103,13 +107,13 @@ public actor PipelineRunner {
                 }
             )
             mark(.transcribe, onStage)
-            let transcriber = try await WhisperTranscriber(model: whisperModel, modelFolder: modelsDir)
+            let transcriber = try await makeTranscriber()
             let mic = try await transcriber.transcribe(wav: micSource(), language: meta.language)
             let system = try await transcriber.transcribe(wav: folder.systemWAV, language: meta.language)
             try write(mic, to: folder.whisperMicJSON)
             try write(system, to: folder.whisperSystemJSON)
             meta.detectedLanguage = mic.detectedLanguage ?? system.detectedLanguage
-            meta.whisperModel = whisperModel
+            meta.whisperModel = sttModelName
             meta.pipeline.transcribed = true
             try folder.saveMeta(meta)
         }
@@ -140,20 +144,23 @@ public actor PipelineRunner {
         if let summarizer, force || !meta.pipeline.summarized {
             mark(.summarize, onStage)
             let transcript = try String(contentsOf: folder.transcriptMD, encoding: .utf8)
-            let result = try await summarizer.summarize(transcript: transcript)
+            let result = try await summarizer.summarize(
+                transcript: transcript, projectContext: projectContext())
             try result.markdown.write(to: folder.summaryMD, atomically: true, encoding: .utf8)
             if let title = result.title { meta.title = title }
             appendCorrections(result, to: &meta)
+            appendReplacements(result, to: &meta)
             if !result.speakerNames.isEmpty {
                 meta.speakerNames.merge(result.speakerNames) { _, new in new }
             }
-            // Persist names + corrections before re-rendering (renderTranscript
-            // reads them back from meta.json), but mark the stage done only
-            // after the render — a failed render re-runs summarize instead of
-            // stranding transcript.md without the fixes.
+            // Persist names + fixes before re-rendering (renderTranscript reads
+            // them back from meta.json), but mark the stage done only after the
+            // render — a failed render re-runs summarize instead of stranding
+            // transcript.md without the fixes.
             try folder.saveMeta(meta)
-            if !result.speakerNames.isEmpty || !result.corrections.isEmpty {
-                try renderTranscript(names: meta.speakerNames)  // names + corrections
+            if !result.speakerNames.isEmpty || !result.corrections.isEmpty
+                || !result.replacements.isEmpty {
+                try renderTranscript(names: meta.speakerNames)
             }
             meta.pipeline.summarized = true
             try folder.saveMeta(meta)
@@ -192,14 +199,15 @@ public actor PipelineRunner {
         case .transcribe:
             // No stage channel here (CLI subcommands) — still share the one
             // coalesced download rather than starting a second one.
-            try await ModelProvisioner.shared.ensureReady(modelsDir: modelsDir, model: whisperModel)
-            let transcriber = try await WhisperTranscriber(model: whisperModel, modelFolder: modelsDir)
+            try await ModelProvisioner.shared.ensureReady(
+                modelsDir: modelsDir, engine: engine, model: whisperModel)
+            let transcriber = try await makeTranscriber()
             let mic = try await transcriber.transcribe(wav: micSource(), language: meta.language)
             let system = try await transcriber.transcribe(wav: folder.systemWAV, language: meta.language)
             try write(mic, to: folder.whisperMicJSON)
             try write(system, to: folder.whisperSystemJSON)
             meta.detectedLanguage = mic.detectedLanguage ?? system.detectedLanguage
-            meta.whisperModel = whisperModel
+            meta.whisperModel = sttModelName
             meta.pipeline.transcribed = true
         case .diarize:
             let spans = await runDiarization(expectedSpeakers: meta.expectedSpeakers)
@@ -218,17 +226,20 @@ public actor PipelineRunner {
                 return meta
             }
             let transcript = try String(contentsOf: folder.transcriptMD, encoding: .utf8)
-            let result = try await summarizer.summarize(transcript: transcript)
+            let result = try await summarizer.summarize(
+                transcript: transcript, projectContext: projectContext())
             try result.markdown.write(to: folder.summaryMD, atomically: true, encoding: .utf8)
             if let title = result.title { meta.title = title }
             appendCorrections(result, to: &meta)
+            appendReplacements(result, to: &meta)
             if !result.speakerNames.isEmpty {
                 meta.speakerNames.merge(result.speakerNames) { _, new in new }
             }
-            // Save first (renderTranscript reads corrections from meta.json);
+            // Save first (renderTranscript reads the fixes from meta.json);
             // the summarized flag lands with the final save below.
             try folder.saveMeta(meta)
-            if !result.speakerNames.isEmpty || !result.corrections.isEmpty {
+            if !result.speakerNames.isEmpty || !result.corrections.isEmpty
+                || !result.replacements.isEmpty {
                 try renderTranscript(names: meta.speakerNames)
             }
             meta.pipeline.summarized = true
@@ -249,6 +260,27 @@ public actor PipelineRunner {
             names: meta.speakerNames.merging(result.speakerNames) { _, new in new }
         )
         meta.speakerCorrections = merged.isEmpty ? nil : merged
+    }
+
+    /// Accumulate glossary-driven term fixes; exact duplicates from a
+    /// re-summarize are skipped (replacing the same text twice is a no-op,
+    /// but the list shouldn't grow unboundedly).
+    private func appendReplacements(_ result: SummaryResult, to meta: inout CallMeta) {
+        guard !result.replacements.isEmpty else { return }
+        var existing = meta.textReplacements ?? []
+        for replacement in result.replacements where !existing.contains(replacement) {
+            existing.append(replacement)
+        }
+        meta.textReplacements = existing
+    }
+
+    /// The project's glossary/notes — context.md beside the call folders,
+    /// nil when absent or empty.
+    private func projectContext() -> String? {
+        let url = folder.url.deletingLastPathComponent().appendingPathComponent("context.md")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Re-render transcript.md from cached data with a (possibly updated) name
@@ -274,7 +306,8 @@ public actor PipelineRunner {
         if let corrections = meta?.speakerCorrections {
             transcript = SpeakerCorrections.apply(corrections, to: transcript, names: names)
         }
-        let markdown = TranscriptMarkdownRenderer.render(transcript, names: names)
+        let markdown = TranscriptMarkdownRenderer.render(
+            transcript, names: names, replacements: meta?.textReplacements ?? [])
         try markdown.write(to: folder.transcriptMD, atomically: true, encoding: .utf8)
         // Structured sidecar with real per-utterance times for the UI highlight.
         // Name-independent (canonical speaker labels); names are applied on display.
@@ -306,6 +339,20 @@ public actor PipelineRunner {
             log.info(note("stage=diarize spans=\(spans.count)"))
         }
         return spans
+    }
+
+    /// The engine's transcriber, loading its model from disk (both engines
+    /// fall back to downloading only on a first run `ensureReady` missed).
+    private func makeTranscriber() async throws -> SpeechTranscriber {
+        switch engine {
+        case .whisper: try await WhisperTranscriber(model: whisperModel, modelFolder: modelsDir)
+        case .parakeet: try await ParakeetTranscriber(modelsDir: modelsDir)
+        }
+    }
+
+    /// The model identifier recorded in meta.json for this run's engine.
+    private var sttModelName: String {
+        engine == .whisper ? whisperModel : engine.modelName
     }
 
     /// The mic signal to transcribe: the echo-cancelled track when present,

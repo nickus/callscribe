@@ -124,7 +124,7 @@ final class DictationHotkey {
     /// A chord — ⌘⇧, ⌥⇧, ⌃⇧ — is somebody's shortcut, not a dictation.
     private static var otherModifiersHeld: Bool {
         let flags = CGEventSource.flagsState(.combinedSessionState)
-        return !flags.intersection([.maskCommand, .maskAlternate, .maskControl]).isEmpty
+        return !flags.isDisjoint(with: [.maskCommand, .maskAlternate, .maskControl])
     }
 
     /// Whether a key went down within the last poll window. The 1.5× slack covers

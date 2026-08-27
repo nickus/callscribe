@@ -101,7 +101,7 @@ import Testing
 
     @Test func contentBeforeFirstHeadingBecomesUntitledSection() {
         let sections = SummaryMarkdown.parse("Loose intro.\n\n## Summary\nBody.")
-        #expect(sections[0].title == "")
+        #expect(sections[0].title.isEmpty)
         #expect(sections[0].blocks == [.paragraph("Loose intro.")])
         #expect(sections[1].title == "Summary")
     }

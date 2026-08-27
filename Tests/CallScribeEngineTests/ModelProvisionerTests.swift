@@ -46,6 +46,46 @@ import Testing
         #expect(ModelProvisioner.isWhisperReady(modelsDir: dir) == true)
     }
 
+    @Test func parakeetNothingOnDiskIsNotReady() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        #expect(ModelProvisioner.isParakeetReady(modelsDir: dir) == false)
+        #expect(ModelProvisioner.isReady(engine: .parakeet, modelsDir: dir) == false)
+    }
+
+    @Test func parakeetMarkerMakesItReady() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try touch(
+            ParakeetTranscriber.modelURL(modelsDir: dir)
+                .appendingPathComponent(".callscribe-provisioned"))
+
+        #expect(ModelProvisioner.isParakeetReady(modelsDir: dir) == true)
+        #expect(ModelProvisioner.isReady(engine: .parakeet, modelsDir: dir) == true)
+        // Engines are provisioned independently — a ready Parakeet says
+        // nothing about Whisper.
+        #expect(ModelProvisioner.isReady(engine: .whisper, modelsDir: dir) == false)
+    }
+
+    /// Same no-network guarantee as Whisper's: a marker on disk means
+    /// `ensureReady` returns without downloading, loading, or firing onStart.
+    @Test func parakeetEnsureReadyIsANoOpOnceProvisioned() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try touch(
+            ParakeetTranscriber.modelURL(modelsDir: dir)
+                .appendingPathComponent(".callscribe-provisioned"))
+
+        let started = Mutex(false)
+        try await ModelProvisioner().ensureReady(
+            modelsDir: dir,
+            engine: .parakeet,
+            onStart: { started.set(true) })
+
+        #expect(started.get() == false)
+    }
+
     /// The ready path must not touch the network or load anything — this test would
     /// hang or throw if `ensureReady` tried, and `onStart` must stay silent so no
     /// caller reports "waiting for the model" when nothing is waiting.
