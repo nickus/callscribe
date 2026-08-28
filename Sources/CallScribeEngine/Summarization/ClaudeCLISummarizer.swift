@@ -36,7 +36,10 @@ public struct ClaudeCLISummarizer: Summarizer {
     private let workingDirectory: URL?
     private let log: Log
 
-    public init?(workingDirectory: URL? = nil, timeout: TimeInterval = 180, log: Log = .shared) {
+    /// Default timeout sized for hour-plus calls: a ~60-minute transcript
+    /// (~95 KB) with a project glossary legitimately takes `claude -p` well
+    /// over the old 3 minutes to read and summarize.
+    public init?(workingDirectory: URL? = nil, timeout: TimeInterval = 600, log: Log = .shared) {
         guard let binary = Self.resolveBinary() else { return nil }
         self.binaryURL = binary
         self.timeout = timeout
@@ -64,6 +67,9 @@ public struct ClaudeCLISummarizer: Summarizer {
 
     public func summarize(transcript: String, projectContext: String?) async throws -> SummaryResult {
         let prompt = SummaryPrompt.build(transcript: transcript, projectContext: projectContext)
+        // Size, not content: when this times out, the log should say whether
+        // the input was huge without anyone digging through call folders.
+        log.info("summarizer: prompt \(prompt.count) chars, timeout \(Int(timeout))s")
         let output = try runClaude(prompt: prompt)
         return SummaryPrompt.parse(output)
     }
