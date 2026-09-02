@@ -12,6 +12,17 @@ struct Turn: Identifiable {
     let text: String
 }
 
+/// A pending "this range of voice is <name>" mark, awaiting Apply. Usually a
+/// whole turn; a partial range when the user split a turn at the playhead
+/// (one rendered turn can hold two voices the diarizer merged).
+struct PendingMark: Identifiable, Equatable {
+    let id = UUID()
+    let turnID: Int
+    let start: TimeInterval
+    let end: TimeInterval
+    let name: String
+}
+
 /// The transcript rendered as chat bubbles: "Me" on the right (accent tint),
 /// other speakers on the left, each speaker color-coded. Every timecode is
 /// clickable and seeks the audio player; a turn is highlighted whenever the
@@ -26,13 +37,14 @@ struct TranscriptView: View {
     let turns: [Turn]
     let names: [String: String]
     let player: CallAudioPlayer
-    /// Pending "this turn is <name>" marks (turn.id → name), owned by the
-    /// detail view; empty when annotation isn't available (no callback).
-    var pendingNames: [Int: String] = [:]
+    /// Pending voice marks, owned by the detail view.
+    var pendingMarks: [PendingMark] = []
     /// Known names to offer as one-click choices.
     var suggestions: [String] = []
-    /// Present = labels are clickable; called with the turn and the typed name.
-    var onAnnotate: ((Turn, String) -> Void)?
+    /// Present = labels are clickable; called with each new mark.
+    var onMark: ((PendingMark) -> Void)?
+    /// Drops every pending mark on one turn.
+    var onClearMarks: ((Int) -> Void)?
 
     @State private var editingTurnID: Int?
     @State private var draftName = ""
@@ -58,19 +70,22 @@ struct TranscriptView: View {
     }
 
     /// The speaker name over a bubble. For remote turns (when annotation is
-    /// available) it's a button: click → name this piece of voice. A pending
-    /// mark shows the chosen name with a pencil until it's applied.
+    /// available) it's a button: click → name this piece of voice. Pending
+    /// marks show their name(s) with a pencil until applied.
     @ViewBuilder
     private func speakerLabel(_ turn: Turn, color: Color, isMe: Bool) -> some View {
-        let display = pendingNames[turn.id] ?? names[turn.label] ?? turn.label
-        if !isMe, onAnnotate != nil {
+        let marks = pendingMarks.filter { $0.turnID == turn.id }
+        let display = marks.first.map { first in
+            marks.count > 1 ? "\(first.name) +\(marks.count - 1)" : first.name
+        } ?? names[turn.label] ?? turn.label
+        if !isMe, onMark != nil {
             Button {
-                draftName = pendingNames[turn.id] ?? ""
+                draftName = marks.first?.name ?? ""
                 editingTurnID = turn.id
             } label: {
                 HStack(spacing: 3) {
                     Text(display).font(.caption.weight(.semibold))
-                    Image(systemName: pendingNames[turn.id] == nil ? "person.crop.circle.badge.questionmark" : "pencil")
+                    Image(systemName: marks.isEmpty ? "person.crop.circle.badge.questionmark" : "pencil")
                         .font(.system(size: 9))
                 }
                 .foregroundStyle(color)
@@ -92,12 +107,18 @@ struct TranscriptView: View {
     }
 
     private func namingPopover(_ turn: Turn) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
+        let trimmed = draftName.trimmingCharacters(in: .whitespaces)
+        let invalid = trimmed.isEmpty || Self.isReserved(trimmed)
+        // The playhead splits a turn where the diarizer merged two voices:
+        // listen, park the playhead at the change, name the tail separately.
+        let playhead = player.currentTime
+        let canSplit = playhead > turn.start + 0.5 && playhead < turn.end - 0.5
+        return VStack(alignment: .leading, spacing: Spacing.sm) {
             Text("Who is speaking here?").font(.caption).foregroundStyle(.secondary)
             TextField("Name", text: $draftName)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 200)
-                .onSubmit { commitName(turn) }
+                .frame(width: 220)
+                .onSubmit { commitMark(turn, from: turn.start) }
             if !suggestions.isEmpty {
                 // One-click picks from names the app already knows.
                 LazyVGrid(
@@ -107,36 +128,41 @@ struct TranscriptView: View {
                     ForEach(suggestions, id: \.self) { name in
                         Button(name) {
                             draftName = name
-                            commitName(turn)
+                            commitMark(turn, from: turn.start)
                         }
                         .buttonStyle(SoftButtonStyle())
                     }
                 }
-                .frame(width: 200)
+                .frame(width: 220)
             }
             HStack {
-                if pendingNames[turn.id] != nil {
-                    Button("Remove mark") {
-                        onAnnotate?(turn, "")
+                if pendingMarks.contains(where: { $0.turnID == turn.id }) {
+                    Button("Clear") {
+                        onClearMarks?(turn.id)
                         editingTurnID = nil
                     }
                 }
                 Spacer()
-                Button("Mark") { commitName(turn) }
+                if canSplit {
+                    Button("From \(CallAudioPlayer.clock(playhead))") {
+                        commitMark(turn, from: playhead)
+                    }
+                    .buttonStyle(SoftButtonStyle())
+                    .disabled(invalid)
+                    .help("Name only the part after the playhead — for a turn where the speaker changes mid-way")
+                }
+                Button("Mark") { commitMark(turn, from: turn.start) }
                     .buttonStyle(SoftButtonStyle(tint: .brand))
-                    .disabled({
-                        let name = draftName.trimmingCharacters(in: .whitespaces)
-                        return name.isEmpty || Self.isReserved(name)
-                    }())
+                    .disabled(invalid)
             }
         }
         .padding(Spacing.md)
     }
 
-    private func commitName(_ turn: Turn) {
+    private func commitMark(_ turn: Turn, from start: TimeInterval) {
         let name = draftName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, !Self.isReserved(name) else { return }
-        onAnnotate?(turn, name)
+        onMark?(PendingMark(turnID: turn.id, start: start, end: turn.end, name: name))
         editingTurnID = nil
     }
 

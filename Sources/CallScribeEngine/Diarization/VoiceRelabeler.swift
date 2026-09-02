@@ -120,11 +120,13 @@ public enum VoiceRelabeler {
         return TranscriptMerger.refineSpanBoundaries(spans, systemWords: words, config: MergeConfig())
     }
 
-    /// Remember each annotated voice for future calls: duration-weighted mean
-    /// of that name's annotated span embeddings replaces any older profile —
-    /// the user just told us what this person sounds like, from THIS call.
-    /// The longest annotated span becomes the person's audible sample on the
-    /// People screen.
+    /// Remember each voice for future calls from ONLY the spans the user
+    /// marked — never from propagated labels. The user's annotations are
+    /// training data; automatic inferences are not, so a wrong inheritance
+    /// can never poison a profile. A single call contributes few spans, but
+    /// every Apply BLENDS into the existing profile (VoiceStore.reinforce),
+    /// so recognition converges across calls from manual marks alone.
+    /// The longest marked span becomes the audible sample on the People screen.
     @discardableResult
     private static func learnVoices(
         assignments: [SpanRelabeler.Assignment],
@@ -136,22 +138,23 @@ public enum VoiceRelabeler {
         var longestSpan: [String: SpeakerSpan] = [:]
         for assignment in assignments {
             let span = spans[assignment.spanIndex]
-            if let best = longestSpan[assignment.name] {
+            let name = assignment.name
+            if let best = longestSpan[name] {
                 if span.end - span.start > best.end - best.start {
-                    longestSpan[assignment.name] = span
+                    longestSpan[name] = span
                 }
             } else {
-                longestSpan[assignment.name] = span
+                longestSpan[name] = span
             }
             guard let embedding = embeddings[assignment.spanIndex] else { continue }
             let weight = Float(max(span.end - span.start, 0.001))
-            var sum = sums[assignment.name] ?? [Float](repeating: 0, count: embedding.count)
+            var sum = sums[name] ?? [Float](repeating: 0, count: embedding.count)
             for i in embedding.indices where i < sum.count { sum[i] += embedding[i] * weight }
-            sums[assignment.name] = sum
+            sums[name] = sum
         }
         let store = VoiceStore()
         for (name, sum) in sums {
-            _ = try store.upsert(VoiceProfile(name: name, embedding: sum))
+            _ = try store.reinforce(name: name, embedding: sum)
             if let span = longestSpan[name] {
                 let lo = max(0, Int(span.start * Double(sampleRate)))
                 let hi = min(audio.count, min(lo + maxSamples, Int(span.end * Double(sampleRate))))

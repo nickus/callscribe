@@ -12,5 +12,5 @@ struct VersionCommand: AsyncParsableCommand {
 }
 
 enum AppInfo {
-    static let version = "0.5.1"
+    static let version = "0.5.3"
 }

@@ -70,12 +70,22 @@ public enum SpanRelabeler {
                 continue
             }
             let pieces = split(span, at: spanMarks)
-            for mark in spanMarks {
-                let best = pieces.indices
-                    .map { ($0, overlap(pieces[$0], mark)) }
-                    .max { $0.1 < $1.1 }
-                guard let best, best.1 > 0 else { continue }
-                assignments.append(Assignment(spanIndex: outSpans.count + best.0, name: mark.name))
+            for (offset, piece) in pieces.enumerated() {
+                // The most specific (shortest) mark covering a piece wins:
+                // "this whole turn is Lesha" plus "from 05:57 it's Alexey"
+                // must yield head → Lesha, tail → Alexey, not a fight over
+                // the tail between both marks.
+                let winner = spanMarks
+                    .filter { overlap(piece, $0) > 0 }
+                    .min { lhs, rhs in
+                        let l = lhs.end - lhs.start
+                        let r = rhs.end - rhs.start
+                        if l != r { return l < r }
+                        return overlap(piece, lhs) > overlap(piece, rhs)
+                    }
+                if let winner {
+                    assignments.append(Assignment(spanIndex: outSpans.count + offset, name: winner.name))
+                }
             }
             outSpans.append(contentsOf: pieces)
         }
@@ -104,8 +114,14 @@ public enum SpanRelabeler {
         max(0, min(span.end, mark.end) - max(span.start, mark.start))
     }
 
-    /// Same bar as enrolled-voice matching in FluidDiarizer.
-    public static let propagationThreshold: Float = 0.35
+    /// Measured on a real call (2026-09-02): a speaker's own spans sit at
+    /// median 0.35 from their own centroid, while different speakers' cluster
+    /// centroids sit at ≈0.87+ — so the old 0.35 (borrowed from cross-call
+    /// matching) rejected the same voice half the time. 0.65 accepts
+    /// same-voice clusters with a wide margin below different-voice territory.
+    /// Cross-call library matching stays far stricter (FluidDiarizer): there
+    /// the same/different distributions overlap and a wrong name is worse.
+    public static let propagationThreshold: Float = 0.65
 
     /// `embeddings` runs parallel to `spans`; nil where a span was too short
     /// to embed. Spans keep their existing name when nothing new applies.

@@ -30,8 +30,8 @@ struct CallDetailView: View {
     @State private var confirmingDelete = false
     @State private var actionError: String?
     @State private var busy = false
-    /// Per-turn voice marks awaiting "Apply names" (turn.id → name).
-    @State private var pendingNames: [Int: String] = [:]
+    /// Voice marks awaiting "Apply names" (whole turns or playhead-split parts).
+    @State private var pendingMarks: [PendingMark] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,21 +79,26 @@ struct CallDetailView: View {
 
                     SectionCard(title: "Transcript", systemImage: "text.quote", isExpanded: $showTranscript) {
                         VStack(alignment: .leading, spacing: Spacing.md) {
-                            if !pendingNames.isEmpty {
+                            if !pendingMarks.isEmpty {
                                 annotationBar
                             }
                             TranscriptView(
                                 turns: turns,
                                 names: names,
                                 player: player,
-                                pendingNames: pendingNames,
+                                pendingMarks: pendingMarks,
                                 suggestions: nameSuggestions,
-                                onAnnotate: { turn, name in
-                                    if name.isEmpty {
-                                        pendingNames[turn.id] = nil
-                                    } else {
-                                        pendingNames[turn.id] = name
+                                onMark: { mark in
+                                    // Re-marking the same range replaces it;
+                                    // a different range on the same turn stacks
+                                    // (whole turn + a playhead-split tail).
+                                    pendingMarks.removeAll {
+                                        $0.turnID == mark.turnID && abs($0.start - mark.start) < 0.01
                                     }
+                                    pendingMarks.append(mark)
+                                },
+                                onClearMarks: { turnID in
+                                    pendingMarks.removeAll { $0.turnID == turnID }
                                 }
                             )
                         }
@@ -549,7 +554,7 @@ struct CallDetailView: View {
     }
 
     private func load() {
-        pendingNames = [:]   // marks belong to the turns being replaced
+        pendingMarks = []    // marks belong to the turns being replaced
         transcript = (try? String(contentsOf: call.folder.transcriptMD, encoding: .utf8)) ?? ""
         summary = (try? String(contentsOf: call.folder.summaryMD, encoding: .utf8)) ?? ""
         names = (try? call.folder.loadMeta().speakerNames) ?? [:]
@@ -634,7 +639,7 @@ extension CallDetailView {
     private var nameSuggestions: [String] {
         var known = state.enrolledVoiceNames()
         known.formUnion(names.values)
-        known.formUnion(pendingNames.values)
+        known.formUnion(pendingMarks.map(\.name))
         return known.sorted()
     }
 
@@ -643,10 +648,10 @@ extension CallDetailView {
     private var annotationBar: some View {
         HStack(spacing: Spacing.sm) {
             Image(systemName: "person.wave.2")
-            Text("\(pendingNames.count) turn(s) marked — applying relabels the whole call by voice")
+            Text("\(pendingMarks.count) mark(s) — applying relabels the whole call by voice")
                 .font(.callout)
             Spacer()
-            Button("Discard") { pendingNames = [:] }
+            Button("Discard") { pendingMarks = [] }
                 .buttonStyle(SoftButtonStyle())
             Button("Apply names") {
                 run { try await applyAnnotations() }
@@ -659,13 +664,11 @@ extension CallDetailView {
     }
 
     private func applyAnnotations() async throws {
-        let byID = Dictionary(uniqueKeysWithValues: turns.map { ($0.id, $0) })
-        let annotations = pendingNames.compactMap { id, name -> VoiceRelabeler.Annotation? in
-            guard let turn = byID[id] else { return nil }
-            return VoiceRelabeler.Annotation(start: turn.start, end: turn.end, name: name)
+        let annotations = pendingMarks.map {
+            VoiceRelabeler.Annotation(start: $0.start, end: $0.end, name: $0.name)
         }
         try await state.applyVoiceAnnotations(annotations, in: call.folder)
-        pendingNames = [:]
+        pendingMarks = []
         load()
     }
 }

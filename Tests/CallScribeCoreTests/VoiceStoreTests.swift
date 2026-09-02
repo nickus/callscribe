@@ -2,6 +2,40 @@ import Foundation
 import Testing
 @testable import CallScribeCore
 
+@Suite struct VoiceReinforceTests {
+    private func store() -> VoiceStore {
+        VoiceStore(fileURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("voices-\(UUID().uuidString)/voices.json"))
+    }
+
+    @Test func firstObservationCreatesTheProfile() throws {
+        let s = store()
+        let voices = try s.reinforce(name: "Ilia", embedding: [1, 0, 0])
+        #expect(voices.count == 1)
+        #expect(voices[0].name == "Ilia")
+    }
+
+    @Test func laterObservationsBlendInsteadOfReplacing() throws {
+        let s = store()
+        _ = try s.reinforce(name: "Ilia", embedding: [1, 0, 0])
+        let voices = try s.reinforce(name: "Ilia", embedding: [0, 1, 0])
+        #expect(voices.count == 1)
+        // Equal blend of the two normalized observations — both calls count.
+        let e = voices[0].embedding
+        #expect(abs(e[0] - 0.5) < 0.001)
+        #expect(abs(e[1] - 0.5) < 0.001)
+        // Identity (id/createdAt) survives the blend.
+    }
+
+    @Test func mismatchedDimensionsFallBackToReplace() throws {
+        let s = store()
+        _ = try s.reinforce(name: "Ilia", embedding: [1, 0, 0])
+        let voices = try s.reinforce(name: "Ilia", embedding: [0, 1])
+        #expect(voices.count == 1)
+        #expect(voices[0].embedding == [0, 1])
+    }
+}
+
 private func tempFile() -> URL {
     FileManager.default.temporaryDirectory
         .appendingPathComponent("voices-\(UUID().uuidString).json")

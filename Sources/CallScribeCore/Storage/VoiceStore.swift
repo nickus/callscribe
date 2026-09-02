@@ -50,6 +50,32 @@ public final class VoiceStore {
         return voices
     }
 
+    /// Blend a fresh voice observation into the existing profile (or create
+    /// one): an equal-weight blend of L2-normalized embeddings. Every marked
+    /// call refines the fingerprint toward how the person sounds ACROSS
+    /// calls and channels — replacing outright made profiles channel-specific,
+    /// which is why recognition across calls kept missing.
+    @discardableResult
+    public func reinforce(name: String, embedding: [Float]) throws -> [VoiceProfile] {
+        let voices = load()
+        guard let existing = voices.first(
+            where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }),
+            existing.embedding.count == embedding.count
+        else {
+            return try upsert(VoiceProfile(name: name, embedding: embedding))
+        }
+        let blended = zip(Self.normalize(existing.embedding), Self.normalize(embedding))
+            .map { ($0 + $1) / 2 }
+        return try upsert(VoiceProfile(
+            id: existing.id, name: existing.name, embedding: blended, createdAt: existing.createdAt))
+    }
+
+    static func normalize(_ vector: [Float]) -> [Float] {
+        let norm = vector.reduce(0) { $0 + $1 * $1 }.squareRoot()
+        guard norm > 0 else { return vector }
+        return vector.map { $0 / norm }
+    }
+
     /// Remove the voice with this name (case-insensitive), sample included.
     @discardableResult
     public func removeVoice(named name: String) throws -> [VoiceProfile] {

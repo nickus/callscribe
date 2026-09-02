@@ -156,6 +156,26 @@ import Testing
         }
     }
 
+    @Test func wholeTurnMarkPlusTailMarkGivesHeadAndTailToTheRightPeople() {
+        // The real-world case: one rendered turn holds two voices — the user
+        // marks the whole turn "Леша", then (playhead at the speaker change)
+        // marks the tail "Алексей". The specific tail mark must win its piece
+        // even though the whole-turn mark also covers it.
+        let spans = [span("a", 0, 20)]
+        let (outSpans, assignments) = SpanRelabeler.resolve(
+            spans: spans,
+            marks: [
+                .init(start: 0, end: 20, name: "Леша"),
+                .init(start: 12, end: 20, name: "Алексей"),
+            ]
+        )
+        #expect(outSpans.map { ($0.start, $0.end).0 } == [0, 12])
+        #expect(assignments.count == 2)
+        let byStart = Dictionary(uniqueKeysWithValues: assignments.map { (outSpans[$0.spanIndex].start, $0.name) })
+        #expect(byStart[0] == "Леша")
+        #expect(byStart[12] == "Алексей")
+    }
+
     @Test func sameNameTwiceOnOneSpanDoesNotSplit() {
         let spans = [span("a", 0, 20)]
         let (outSpans, assignments) = SpanRelabeler.resolve(

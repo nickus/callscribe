@@ -58,10 +58,14 @@ public enum FluidDiarizer {
         }
     }
 
-    /// Below this cosine distance between a diarized speaker's centroid and an
-    /// enrolled voice we call them the same person. Strict on purpose — a false
-    /// name is worse than a missed match.
-    static let voiceMatchThreshold: Float = 0.35
+    /// Cross-call matching needs BOTH closeness and unambiguity: measured on
+    /// real calls (2026-09-02), the same person lands ≈0.4–0.6 from their
+    /// profile in another call while a different person can come as close as
+    /// ≈0.4 — absolute distance alone cannot separate them. So the nearest
+    /// profile must be within the threshold AND clear of the runner-up by the
+    /// margin; a false name is still worse than a missed match.
+    static let voiceMatchThreshold: Float = 0.55
+    static let voiceMatchMargin: Float = 0.1
 
     /// Map each diarized `speakerId` to an enrolled voice name, when confident.
     /// One-to-one: a voice claims at most one speaker and a speaker at most one
@@ -81,16 +85,17 @@ public enum FluidDiarizer {
             sums[seg.speakerId] = acc
         }
 
-        // All (speaker, voice) pairs within the threshold, closest first.
+        // One candidate per speaker: its nearest profile, admitted only when
+        // close enough AND clearly ahead of the second-nearest.
         var candidates: [(distance: Float, speaker: String, name: String)] = []
         for (speakerId, sum) in sums {
             let centroid = normalize(sum)
-            for voice in voices {
-                let d = cosineDistance(centroid, normalize(voice.embedding))
-                if d <= voiceMatchThreshold {
-                    candidates.append((d, speakerId, voice.name))
-                }
-            }
+            let ranked = voices
+                .map { (name: $0.name, distance: cosineDistance(centroid, normalize($0.embedding))) }
+                .sorted { $0.distance < $1.distance }
+            guard let best = ranked.first, best.distance <= voiceMatchThreshold else { continue }
+            if ranked.count > 1, ranked[1].distance - best.distance < voiceMatchMargin { continue }
+            candidates.append((best.distance, speakerId, best.name))
         }
         candidates.sort { $0.distance < $1.distance }
 
