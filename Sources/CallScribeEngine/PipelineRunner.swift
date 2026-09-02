@@ -330,7 +330,7 @@ public actor PipelineRunner {
     /// Diarization, which returns empty spans rather than throwing. Empty means
     /// every remote participant collapses into one speaker in the transcript.
     private func runDiarization(expectedSpeakers: Int?) async -> [SpeakerSpan] {
-        let spans = await FluidDiarizer.diarize(
+        let spans = await CallDiarizer.diarize(
             wav: folder.systemWAV, modelDirectory: modelsDir,
             knownVoices: VoiceStore().load(), expectedSpeakers: expectedSpeakers)
         if spans.isEmpty {

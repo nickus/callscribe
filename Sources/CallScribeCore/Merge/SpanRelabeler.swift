@@ -119,7 +119,7 @@ public enum SpanRelabeler {
     /// centroids sit at ≈0.87+ — so the old 0.35 (borrowed from cross-call
     /// matching) rejected the same voice half the time. 0.65 accepts
     /// same-voice clusters with a wide margin below different-voice territory.
-    /// Cross-call library matching stays far stricter (FluidDiarizer): there
+    /// Cross-call library matching stays far stricter (VoiceMatcher): there
     /// the same/different distributions overlap and a wrong name is worse.
     public static let propagationThreshold: Float = 0.65
 
@@ -147,7 +147,7 @@ public enum SpanRelabeler {
             for i in embedding.indices where i < sum.count { sum[i] += embedding[i] * weight }
             centroids[name] = sum
         }
-        let nameCentroids = centroids.mapValues(normalize)
+        let nameCentroids = centroids.mapValues(VoiceMath.normalize)
 
         // Which names each cluster was annotated with, and where.
         var clusterVotes: [String: Set<String>] = [:]
@@ -197,9 +197,9 @@ public enum SpanRelabeler {
         marks: [(mid: TimeInterval, name: String)]
     ) -> String? {
         if let embedding {
-            let normalized = normalize(embedding)
+            let normalized = VoiceMath.normalize(embedding)
             let best = votes
-                .compactMap { name in nameCentroids[name].map { (name, cosineDistance(normalized, $0)) } }
+                .compactMap { name in nameCentroids[name].map { (name, VoiceMath.cosineDistance(normalized, $0)) } }
                 .min { $0.1 < $1.1 }
             if let best { return best.0 }
         }
@@ -223,9 +223,9 @@ public enum SpanRelabeler {
         }
         var result: [String: String] = [:]
         for (cluster, sum) in sums {
-            let centroid = normalize(sum)
+            let centroid = VoiceMath.normalize(sum)
             let best = nameCentroids
-                .map { ($0.key, cosineDistance(centroid, $0.value)) }
+                .map { ($0.key, VoiceMath.cosineDistance(centroid, $0.value)) }
                 .min { $0.1 < $1.1 }
             if let best, best.1 <= propagationThreshold {
                 result[cluster] = best.0
@@ -234,17 +234,4 @@ public enum SpanRelabeler {
         return result
     }
 
-    private static func normalize(_ vector: [Float]) -> [Float] {
-        let norm = sqrt(vector.reduce(0) { $0 + $1 * $1 })
-        guard norm > 0 else { return vector }
-        return vector.map { $0 / norm }
-    }
-
-    /// 1 − cosine similarity for two L2-normalised vectors (0 = identical).
-    private static func cosineDistance(_ a: [Float], _ b: [Float]) -> Float {
-        guard a.count == b.count else { return 2 }
-        var dot: Float = 0
-        for i in a.indices { dot += a[i] * b[i] }
-        return 1 - dot
-    }
 }

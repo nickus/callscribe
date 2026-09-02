@@ -25,6 +25,7 @@ let package = Package(
                 "CallScribeCore",
                 "CSpeexDSP",
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
+                .product(name: "SpeakerKit", package: "argmax-oss-swift"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ]
         ),

@@ -37,12 +37,6 @@ public enum VoiceRelabeler {
         }
     }
 
-    /// The embedding model wants 1–10 s of audio; short spans are padded
-    /// around their center from the surrounding recording.
-    private static let sampleRate = 16000
-    private static let minSamples = 16_000
-    private static let maxSamples = 160_000
-
     public static func apply(
         annotations: [Annotation],
         in folder: CallFolder,
@@ -57,9 +51,7 @@ public enum VoiceRelabeler {
         let samples = try AudioFileLoader.loadMono16k(folder.systemWAV)
         guard !samples.isEmpty else { throw RelabelError.noAudio }
 
-        let models = try await DiarizerModels.downloadIfNeeded(to: modelDirectory)
-        let manager = DiarizerManager()
-        manager.initialize(models: models)
+        let manager = try await VoiceEmbedding.makeManager(modelDirectory: modelDirectory)
 
         // The turns the user annotated were rendered from REFINED boundaries
         // (word-gap snapping in the merge); resolving against raw spans would
@@ -80,7 +72,7 @@ public enum VoiceRelabeler {
         // Every span embedded once — both the annotated ones (the evidence)
         // and the rest (what the evidence is compared against).
         let embeddings: [[Float]?] = workSpans.map { span in
-            embedding(of: span.start, to: span.end, in: samples, manager: manager)
+            VoiceEmbedding.embed(from: span.start, to: span.end, in: samples, manager: manager)
         }
 
         let relabeled = SpanRelabeler.relabel(
@@ -156,8 +148,9 @@ public enum VoiceRelabeler {
         for (name, sum) in sums {
             _ = try store.reinforce(name: name, embedding: sum)
             if let span = longestSpan[name] {
-                let lo = max(0, Int(span.start * Double(sampleRate)))
-                let hi = min(audio.count, min(lo + maxSamples, Int(span.end * Double(sampleRate))))
+                let lo = max(0, Int(span.start * Double(VoiceEmbedding.sampleRate)))
+                let cap = lo + VoiceEmbedding.maxSamples
+                let hi = min(audio.count, min(cap, Int(span.end * Double(VoiceEmbedding.sampleRate))))
                 if hi > lo {
                     try? store.saveSample(VoiceEnroller.pcm16(Array(audio[lo..<hi])), forName: name)
                 }
@@ -166,30 +159,4 @@ public enum VoiceRelabeler {
         return Set(sums.keys)
     }
 
-    /// Embedding of `[start, end]`, padded to the model's 1 s minimum evenly
-    /// around the range — spilling to the other side at a file edge — and
-    /// capped at its 10 s window. nil only when the whole file is too short.
-    private static func embedding(
-        of start: TimeInterval,
-        to end: TimeInterval,
-        in samples: [Float],
-        manager: DiarizerManager
-    ) -> [Float]? {
-        var lo = max(0, Int(start * Double(Self.sampleRate)))
-        var hi = min(samples.count, Int(end * Double(Self.sampleRate)))
-        guard hi > lo else { return nil }
-        if hi - lo < minSamples {
-            let missing = minSamples - (hi - lo)
-            let leftRoom = lo
-            let rightRoom = samples.count - hi
-            var left = min(missing / 2, leftRoom)
-            let right = min(missing - left, rightRoom)
-            left = min(leftRoom, missing - right)   // spill what the right lacked
-            lo -= left
-            hi += right
-        }
-        if hi - lo > maxSamples { hi = lo + maxSamples }
-        guard hi - lo >= minSamples else { return nil }
-        return try? manager.extractSpeakerEmbedding(from: Array(samples[lo..<hi]))
-    }
 }

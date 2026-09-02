@@ -45,10 +45,16 @@ Speech recognition must run strictly on-device, no network.
    The `SpeechTranscriber` protocol keeps the pipeline and dictation engine-agnostic;
    the choice is stored in UserDefaults (`stt.engine`) and applies to new work only —
    meta.json records which model transcribed each call.
-4. **Diarization of remote participants in the MVP**: FluidAudio (pyannote models on
-   CoreML, on-device) clusters voices on the system-audio track into `Speaker 1/2/3`.
-   Known limits: labels are anonymous (not names), and boundaries degrade on
-   overlapping speech, similar voices, and compressed conference audio. The
+4. **Diarization of remote participants**: pyannote *community-1* via Argmax
+   SpeakerKit (on-device CoreML: powerset segmentation → WeSpeaker embeddings →
+   VBx clustering) — chosen by verified research (DER 20.2% on DIHARD III, the
+   best open cascaded pipeline) after the previous-generation FluidAudio models
+   kept merging quiet participants into the dominant cluster; the exact-count
+   hint now genuinely constrains clustering. FluidAudio stays as the voice
+   LIBRARY's embedding space (matching, relabeling, enrollment re-embed
+   cluster centroids per call), so profiles survived the migration unchanged —
+   and as the Parakeet ASR provider. Known limits: labels are anonymous (not
+   names), and boundaries degrade on overlapping speech and similar voices. The
    diarizer cuts on model frames, so before attribution each boundary between
    different-speaker spans is snapped to the nearest inter-word silence of the
    Whisper transcription (word timings are the finer signal; speakers change

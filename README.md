@@ -6,7 +6,8 @@ remote voices that bleed from the speakers into the mic (SpeexDSP echo
 cancellation), transcribes both fully offline — WhisperKit by default, or
 NVIDIA Parakeet TDT v3 (several-fold faster, a third of the size) selectable
 from the tray menu — diarizes remote
-participants with FluidAudio, merges everything into a timecoded per-speaker
+participants with pyannote community-1 (Argmax SpeakerKit, on-device CoreML),
+merges everything into a timecoded per-speaker
 transcript, and produces a summary + action-item checklist via the local
 `claude -p` CLI — the same LLM pass names the speakers and repairs turns the
 diarizer attributed to the wrong person, judging by conversational context.
@@ -105,7 +106,8 @@ Nothing is written outside `~/Library` and the project folders you pick yourself
 | `Models/models/argmaxinc/whisperkit-coreml/<variant>/` | ~1.5 GB | `argmaxinc/whisperkit-coreml` |
 | `Models/models/openai/whisper-large-v3/` (tokenizer) | 2.7 MB | `openai/whisper-large-v3` |
 | `Models/parakeet-tdt-0.6b-v3/` (only if selected) | ~0.5 GB | `FluidInference/parakeet-tdt-0.6b-v3-coreml` |
-| `Models/speaker-diarization/` | 21 MB | `FluidInference/speaker-diarization-coreml` |
+| `Models/models/argmaxinc/speakerkit-coreml/` | ~100 MB | `argmaxinc/speakerkit-coreml` |
+| `Models/speaker-diarization/` (voice library embedder) | 21 MB | `FluidInference/speaker-diarization-coreml` |
 | `speaker-diarization/` | 13 MB | same repo, legacy file names |
 
 The tokenizer is a *separate* fetch from the model snapshot, which is why "the

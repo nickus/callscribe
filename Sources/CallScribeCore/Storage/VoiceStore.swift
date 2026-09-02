@@ -64,16 +64,10 @@ public final class VoiceStore {
         else {
             return try upsert(VoiceProfile(name: name, embedding: embedding))
         }
-        let blended = zip(Self.normalize(existing.embedding), Self.normalize(embedding))
+        let blended = zip(VoiceMath.normalize(existing.embedding), VoiceMath.normalize(embedding))
             .map { ($0 + $1) / 2 }
         return try upsert(VoiceProfile(
             id: existing.id, name: existing.name, embedding: blended, createdAt: existing.createdAt))
-    }
-
-    static func normalize(_ vector: [Float]) -> [Float] {
-        let norm = vector.reduce(0) { $0 + $1 * $1 }.squareRoot()
-        guard norm > 0 else { return vector }
-        return vector.map { $0 / norm }
     }
 
     /// Remove the voice with this name (case-insensitive), sample included.
