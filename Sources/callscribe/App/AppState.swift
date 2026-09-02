@@ -479,6 +479,33 @@ final class AppState {
         refreshHistory()
     }
 
+    /// Apply the user's per-utterance name annotations: relabel every
+    /// diarization span from the annotated voices (the annotations are ground
+    /// truth), remember the voices for future calls, then re-merge so the
+    /// whole transcript shows names. Old label→name display mappings and
+    /// timecode-keyed corrections are superseded by the relabeling.
+    func applyVoiceAnnotations(
+        _ annotations: [VoiceRelabeler.Annotation], in folder: CallFolder
+    ) async throws {
+        try ensureIdle(folder, action: "relabeling")
+        let modelsDir = try AppPaths.ensureModelsDirectory()
+        try await showing(.diarize, on: folder) {
+            try await VoiceRelabeler.apply(
+                annotations: annotations, in: folder, modelDirectory: modelsDir)
+        }
+        var meta = try folder.loadMeta()
+        meta.speakerNames = meta.speakerNames.filter { $0.key == "Me" }
+        meta.speakerCorrections = nil
+        try folder.saveMeta(meta)
+        let runner = PipelineRunner(
+            folder: folder, modelsDir: modelsDir, summarizer: nil,
+            project: projectName(of: folder))
+        try await showing(.merge, on: folder) {
+            _ = try await runner.runStage(.merge, force: true)
+        }
+        refreshHistory()
+    }
+
     /// A call must be untouched by the pipeline AND not the live recording
     /// before destructive per-call actions run — both would strand open paths.
     private func ensureIdle(_ folder: CallFolder, action: String) throws {
@@ -543,11 +570,13 @@ final class AppState {
     func enrollVoice(label: String, name: String, in folder: CallFolder) async throws {
         let modelsDir = try AppPaths.ensureModelsDirectory()
         // Loads and compiles the diarizer models before reprocessing even starts.
-        let embedding = try await showing(.diarize, on: folder) {
-            try await VoiceEnroller.embedding(
-                forSpeakerLabel: label, in: folder, modelDirectory: modelsDir)
+        let learned = try await showing(.diarize, on: folder) {
+            try await VoiceEnroller.learn(
+                speakerLabel: label, in: folder, modelDirectory: modelsDir)
         }
-        try VoiceStore().upsert(VoiceProfile(name: name, embedding: embedding))
+        let store = VoiceStore()
+        try store.upsert(VoiceProfile(name: name, embedding: learned.embedding))
+        try? store.saveSample(learned.sample, forName: name)
         try await reprocessSpeakers(folder, modelsDir: modelsDir)
     }
 

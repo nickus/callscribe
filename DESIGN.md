@@ -123,6 +123,16 @@ Speech recognition must run strictly on-device, no network.
    automatically. Matching happens at the speaker level, not FluidAudio's loose
    per-segment matching (which over-matches similar voices), and assignment is
    greedy one-to-one — a wrong name is worse than a missed match.
+   The primary way voices get learned is per-utterance annotation: speaker
+   labels in the transcript are clickable, the user names a few turns ("this
+   piece of voice is Ilia") and applies — those marks are ground truth.
+   `SpanRelabeler` (pure, unit-tested) then reassigns every diarization span:
+   an annotated span keeps its mark unconditionally; a cluster annotated with
+   one name inherits it wholesale; a cluster annotated with several names (the
+   diarizer merged people) splits per-span by voice; unannotated clusters get
+   a name only within the strict distance threshold. The voices land in the
+   library (with an audible WAV sample — the People screen lists them), so
+   future calls are named automatically.
 13. **Calls are grouped into projects** — arbitrary folders the user picks; a
    "Default" project pointing at `~/Documents/CallNotes` keeps old recordings
    working. Processing runs in the background so the next call can start

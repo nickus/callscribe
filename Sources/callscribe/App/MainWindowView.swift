@@ -14,6 +14,7 @@ struct MainWindowView: View {
     @State private var selectedCallID: String?
     @State private var showNewProject = false
     @State private var showHistory = true
+    @State private var showPeople = false
 
     private var selectedCall: AppState.CallSummary? {
         state.calls.first { $0.id == selectedCallID }
@@ -72,6 +73,14 @@ struct MainWindowView: View {
                     .help("Edit this project's glossary — the summarizer uses it to fix and name terms")
                     .pointerCursor()
 
+                    Button {
+                        showPeople = true
+                    } label: {
+                        Label("People", systemImage: "person.2")
+                    }
+                    .help("Learned voices: names and how they sound")
+                    .pointerCursor()
+
                     // Its own window — dictations aren't scoped to the project
                     // these buttons select.
                     Button {
@@ -94,6 +103,9 @@ struct MainWindowView: View {
             NewProjectSheet { name, parent in
                 state.addProject(name: name, parentURL: parent)
             }
+        }
+        .sheet(isPresented: $showPeople) {
+            PeopleView()
         }
     }
 

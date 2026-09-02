@@ -116,10 +116,12 @@ struct EnrollCommand: AsyncParsableCommand {
     func run() async throws {
         let f = callFolder(folder)
         let modelsDir = try AppPaths.ensureModelsDirectory()
-        let embedding = try await VoiceEnroller.embedding(
-            forSpeakerLabel: speaker, in: f, modelDirectory: modelsDir)
-        let voices = try VoiceStore().upsert(VoiceProfile(name: name, embedding: embedding))
-        print("Learned \(name) (\(embedding.count)-dim). Library now has \(voices.count) voice(s).")
+        let learned = try await VoiceEnroller.learn(
+            speakerLabel: speaker, in: f, modelDirectory: modelsDir)
+        let store = VoiceStore()
+        let voices = try store.upsert(VoiceProfile(name: name, embedding: learned.embedding))
+        try? store.saveSample(learned.sample, forName: name)
+        print("Learned \(name) (\(learned.embedding.count)-dim). Library now has \(voices.count) voice(s).")
         let runner = PipelineRunner(folder: f, modelsDir: modelsDir, summarizer: nil)
         _ = try await runner.runStage(.diarize, force: true)
         _ = try await runner.runStage(.merge, force: true)

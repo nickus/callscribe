@@ -25,12 +25,14 @@ public enum VoiceEnroller {
     private static let minSamples = 16_000    // need at least 1 s
 
     /// `speakerLabel` is the canonical label as it appears in `turns.json`
-    /// ("Speaker 2", "Me" — though "Me" is never enrolled).
-    public static func embedding(
-        forSpeakerLabel speakerLabel: String,
+    /// ("Speaker 2", "Me" — though "Me" is never enrolled). Returns the
+    /// fingerprint plus the audio clip it was computed from — the clip becomes
+    /// the person's sample on the People screen.
+    public static func learn(
+        speakerLabel: String,
         in folder: CallFolder,
         modelDirectory: URL
-    ) async throws -> [Float] {
+    ) async throws -> (embedding: [Float], sample: [Int16]) {
         let data = try Data(contentsOf: folder.turnsJSON)
         let transcript = try JSONDecoder().decode(Transcript.self, from: data)
         let ranges = transcript.utterances
@@ -55,6 +57,12 @@ public enum VoiceEnroller {
         let models = try await DiarizerModels.downloadIfNeeded(to: modelDirectory)
         let manager = DiarizerManager()
         manager.initialize(models: models)
-        return try manager.extractSpeakerEmbedding(from: clip)
+        let embedding = try manager.extractSpeakerEmbedding(from: clip)
+        return (embedding, pcm16(clip))
+    }
+
+    /// Float [-1, 1] → Int16 PCM for the WAV sample.
+    static func pcm16(_ clip: [Float]) -> [Int16] {
+        clip.map { Int16(max(-1, min(1, $0)) * 32767) }
     }
 }

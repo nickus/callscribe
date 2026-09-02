@@ -116,7 +116,9 @@ diarizer run if you delete them.
 
 **Created by the app:**
 
-- `projects.json` — project list and selection; `voices.json` — enrolled voice embeddings
+- `projects.json` — project list and selection; `voices.json` — learned voice
+  embeddings, with audible samples in `voice-samples/` (browse them via the
+  People toolbar button; teach voices by clicking speaker labels in a transcript)
 - `context.md` in a project's folder (toolbar → Context) — glossary/terms the
   summarizer uses to name topics correctly and fix misheard terms in the transcript
 - `dictations.md` — every dictation, as a timestamped Markdown entry. Unlike the

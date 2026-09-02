@@ -50,12 +50,37 @@ public final class VoiceStore {
         return voices
     }
 
-    /// Remove the voice with this name (case-insensitive).
+    /// Remove the voice with this name (case-insensitive), sample included.
     @discardableResult
     public func removeVoice(named name: String) throws -> [VoiceProfile] {
         var voices = load()
         voices.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
         try save(voices)
+        try? FileManager.default.removeItem(at: sampleURL(forName: name))
         return voices
+    }
+
+    // MARK: - Voice samples (for the People screen)
+
+    /// A short WAV of this person's voice, saved when their voice is learned.
+    /// Keyed by name slug — re-learning replaces the sample, like the profile.
+    public func sampleURL(forName name: String) -> URL {
+        fileURL.deletingLastPathComponent()
+            .appendingPathComponent("voice-samples/\(Project.folderSlug(name)).wav")
+    }
+
+    public func hasSample(forName name: String) -> Bool {
+        FileManager.default.fileExists(atPath: sampleURL(forName: name).path)
+    }
+
+    /// Save a 16 kHz mono sample for this voice, replacing any older one.
+    public func saveSample(_ samples: [Int16], forName name: String) throws {
+        let url = sampleURL(forName: name)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: url)
+        let writer = try WAVWriter(url: url)
+        try writer.append(samples)
+        try writer.finalize()
     }
 }

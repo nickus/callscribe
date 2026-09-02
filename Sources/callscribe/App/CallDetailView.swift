@@ -30,6 +30,8 @@ struct CallDetailView: View {
     @State private var confirmingDelete = false
     @State private var actionError: String?
     @State private var busy = false
+    /// Per-turn voice marks awaiting "Apply names" (turn.id → name).
+    @State private var pendingNames: [Int: String] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,7 +78,25 @@ struct CallDetailView: View {
                     }
 
                     SectionCard(title: "Transcript", systemImage: "text.quote", isExpanded: $showTranscript) {
-                        TranscriptView(turns: turns, names: names, player: player)
+                        VStack(alignment: .leading, spacing: Spacing.md) {
+                            if !pendingNames.isEmpty {
+                                annotationBar
+                            }
+                            TranscriptView(
+                                turns: turns,
+                                names: names,
+                                player: player,
+                                pendingNames: pendingNames,
+                                suggestions: nameSuggestions,
+                                onAnnotate: { turn, name in
+                                    if name.isEmpty {
+                                        pendingNames[turn.id] = nil
+                                    } else {
+                                        pendingNames[turn.id] = name
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
                 .padding(Spacing.xl)
@@ -529,6 +549,7 @@ struct CallDetailView: View {
     }
 
     private func load() {
+        pendingNames = [:]   // marks belong to the turns being replaced
         transcript = (try? String(contentsOf: call.folder.transcriptMD, encoding: .utf8)) ?? ""
         summary = (try? String(contentsOf: call.folder.summaryMD, encoding: .utf8)) ?? ""
         names = (try? call.folder.loadMeta().speakerNames) ?? [:]
@@ -543,6 +564,24 @@ struct CallDetailView: View {
         player.load(call.folder)
     }
 
+    /// Check/uncheck a "My tasks" item and persist it back to summary.md.
+    private func toggleTask(_ index: Int) {
+        let updated = SummaryMarkdown.toggleTask(summary, index: index)
+        summary = updated
+        try? updated.write(to: call.folder.summaryMD, atomically: true, encoding: .utf8)
+    }
+
+    /// Delete a "My tasks" item and persist it back to summary.md.
+    private func deleteTask(_ index: Int) {
+        let updated = SummaryMarkdown.removeTask(summary, index: index)
+        summary = updated
+        try? updated.write(to: call.folder.summaryMD, atomically: true, encoding: .utf8)
+    }
+}
+
+// MARK: - Voice annotation (name turns → relabel the call)
+
+extension CallDetailView {
     /// Build the turns the transcript view renders. Prefer the structured
     /// sidecar (real per-utterance start/end times → precise highlight of
     /// overlapping speech); fall back to parsing `transcript.md` for calls not
@@ -590,17 +629,43 @@ struct CallDetailView: View {
         return result
     }
 
-    /// Check/uncheck a "My tasks" item and persist it back to summary.md.
-    private func toggleTask(_ index: Int) {
-        let updated = SummaryMarkdown.toggleTask(summary, index: index)
-        summary = updated
-        try? updated.write(to: call.folder.summaryMD, atomically: true, encoding: .utf8)
+    /// Known names to offer in the naming popover: the voice library plus
+    /// whatever this call already shows, plus marks made just now.
+    private var nameSuggestions: [String] {
+        var known = state.enrolledVoiceNames()
+        known.formUnion(names.values)
+        known.formUnion(pendingNames.values)
+        return known.sorted()
     }
 
-    /// Delete a "My tasks" item and persist it back to summary.md.
-    private func deleteTask(_ index: Int) {
-        let updated = SummaryMarkdown.removeTask(summary, index: index)
-        summary = updated
-        try? updated.write(to: call.folder.summaryMD, atomically: true, encoding: .utf8)
+    /// The banner over the transcript while voice marks are pending: apply
+    /// them (learn the voices, relabel the whole call) or drop them.
+    private var annotationBar: some View {
+        HStack(spacing: Spacing.sm) {
+            Image(systemName: "person.wave.2")
+            Text("\(pendingNames.count) turn(s) marked — applying relabels the whole call by voice")
+                .font(.callout)
+            Spacer()
+            Button("Discard") { pendingNames = [:] }
+                .buttonStyle(SoftButtonStyle())
+            Button("Apply names") {
+                run { try await applyAnnotations() }
+            }
+            .buttonStyle(SoftButtonStyle(tint: .brand))
+            .disabled(busy || state.isProcessing(call.folder))
+        }
+        .padding(Spacing.md)
+        .background(Color.brand.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func applyAnnotations() async throws {
+        let byID = Dictionary(uniqueKeysWithValues: turns.map { ($0.id, $0) })
+        let annotations = pendingNames.compactMap { id, name -> VoiceRelabeler.Annotation? in
+            guard let turn = byID[id] else { return nil }
+            return VoiceRelabeler.Annotation(start: turn.start, end: turn.end, name: name)
+        }
+        try await state.applyVoiceAnnotations(annotations, in: call.folder)
+        pendingNames = [:]
+        load()
     }
 }

@@ -112,7 +112,7 @@ public enum TranscriptMerger {
     /// different-speaker spans moves to the midpoint of the nearest inter-word
     /// silence (within `spanBoundaryRefineTolerance`), so no word straddles a
     /// boundary and turn edges stop drifting. `systemWords` sorted by start.
-    static func refineSpanBoundaries(
+    public static func refineSpanBoundaries(
         _ spans: [SpeakerSpan], systemWords: [Word], config: MergeConfig
     ) -> [SpeakerSpan] {
         guard config.spanBoundaryRefineTolerance > 0, spans.count > 1 else { return spans }
